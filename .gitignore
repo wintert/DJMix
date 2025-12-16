@@ -1,0 +1,58 @@
+# Build outputs
+bin/
+obj/
+build/
+*.dll
+*.exe
+*.pdb
+*.user
+*.suo
+*.cache
+
+# Visual Studio
+.vs/
+*.sln.DotSettings.user
+
+# C++ build artifacts
+*.obj
+*.o
+*.lib
+*.a
+*.so
+*.dylib
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+
+# Dependencies
+libs/soundtouch/.git/
+libs/asiosdk/
+
+# vcpkg
+vcpkg_installed/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Temporary files
+*.tmp
+*.log
+*.swp
+*~
+
+# NuGet
+packages/
+*.nupkg
+
+# User-specific files
+*.rsuser
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
