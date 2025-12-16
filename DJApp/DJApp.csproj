@@ -15,4 +15,12 @@
     <PackageReference Include="SoundTouch.Net" Version="2.3.2" />
   </ItemGroup>
 
+  <!-- Always copy the latest C++ DLL when building -->
+  <Target Name="CopyNativeDlls" AfterTargets="Build">
+    <Message Importance="high" Text="Copying C++ DLLs to output directory..." />
+    <Copy SourceFiles="$(ProjectDir)..\DJAudioEngine\build\bin\DJAudioEngine.dll" 
+          DestinationFolder="$(OutDir)" 
+          SkipUnchangedFiles="false" />
+  </Target>
+
 </Project>

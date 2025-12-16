@@ -46,7 +46,7 @@ public:
     bool loadTrack(const char* filepath);
     void unloadTrack();
     
-    void play();
+    void play(int64_t startPosition = -1);
     void pause();
     void stop();
     bool isPlaying() const { return is_playing_; }
@@ -72,7 +72,7 @@ public:
     
     // Sync support
     int64_t getSamplePosition() const { return sample_position_; }
-    void setSamplePosition(int64_t pos);
+    void setSamplePosition(int64_t pos, bool forceSync = false);
     double getPhase() const;  // 0.0 to 1.0 within beat
     
 private:

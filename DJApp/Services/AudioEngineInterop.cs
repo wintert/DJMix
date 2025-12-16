@@ -34,6 +34,9 @@ namespace DJAutoMixApp.Services
         public static extern void deck_play(int deckId);
 
         [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern void deck_play_synced(int deckId, int masterDeckId);
+
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
         public static extern void deck_pause(int deckId);
 
         [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]

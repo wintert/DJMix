@@ -1,5 +1,9 @@
 #include "dj_audio_internal.h"
 #include <cmath>
+#include <cstdio>
+#ifdef _WIN32
+#include <Windows.h>
+#endif
 
 namespace dj {
 
@@ -26,45 +30,39 @@ void SyncManager::disable(int deck_id) {
 }
 
 void SyncManager::alignNow(Deck* slave, Deck* master) {
-    if (!slave || !master) return;
+    FILE* logFile = fopen("c:\\Apps\\DJApp\\cpp_debug.log", "a");
+    
+    if (!slave || !master) {
+        if (logFile) { fprintf(logFile, "alignNow: null deck\n"); fclose(logFile); }
+        return;
+    }
     
     double master_bpm = master->getBPM();
     double slave_bpm = slave->getBPM();
     
-    if (master_bpm <= 0.0 || slave_bpm <= 0.0) return;
+    if (master_bpm <= 0.0 || slave_bpm <= 0.0) {
+        if (logFile) { fprintf(logFile, "alignNow: Invalid BPM m=%.1f s=%.1f\n", master_bpm, slave_bpm); fclose(logFile); }
+        return;
+    }
     
-    // Match tempo first
+    // Match tempo
     double tempo_ratio = master_bpm / slave_bpm;
     slave->setTempo(tempo_ratio);
     
-    // Get current positions accounting for beat offsets
-    int sample_rate = 44100;  // TODO: Get from deck
+    // Simple: set slave to same position as master (for same song testing)
+    int64_t master_pos = master->getSamplePosition();
     
-    // Master's adjusted position and phase
-    int64_t master_offset_samples = static_cast<int64_t>(master->getBeatOffset() * sample_rate);
-    int64_t master_adjusted_pos = master->getSamplePosition() - master_offset_samples;
-    double master_seconds_per_beat = 60.0 / master_bpm;
-    int64_t master_samples_per_beat = static_cast<int64_t>(master_seconds_per_beat * sample_rate);
-    double master_phase = (master_adjusted_pos % master_samples_per_beat) / (double)master_samples_per_beat;
-    if (master_phase < 0) master_phase += 1.0;
+    if (logFile) {
+        fprintf(logFile, "alignNow: master_pos=%lld, setting slave with forceSync=true\n", (long long)master_pos);
+        fflush(logFile);
+    }
     
-    // Slave's target position with tempo adjustment
-    double slave_seconds_per_beat = 60.0 / (slave_bpm * tempo_ratio);
-    int64_t slave_samples_per_beat = static_cast<int64_t>(slave_seconds_per_beat * sample_rate);
-    int64_t slave_offset_samples = static_cast<int64_t>(slave->getBeatOffset() * sample_rate);
+    // Use forceSync=true to clear SoundTouch buffer!
+    slave->setSamplePosition(master_pos, true);
     
-    // Calculate which beat the slave is currently on
-    int64_t slave_current_pos = slave->getSamplePosition();
-    int64_t slave_adjusted_pos = slave_current_pos - slave_offset_samples;
-    int64_t current_beat = slave_adjusted_pos / slave_samples_per_beat;
-    
-    // Set slave to same phase within its current beat
-    int64_t target_pos = slave_offset_samples + (current_beat * slave_samples_per_beat) + 
-                         static_cast<int64_t>(master_phase * slave_samples_per_beat);
-    
-    // Apply the alignment
-    if (target_pos >= 0 && target_pos < slave_current_pos + slave_samples_per_beat) {
-        slave->setSamplePosition(target_pos);
+    if (logFile) {
+        fprintf(logFile, "alignNow: Done, slave now at %lld\n", (long long)slave->getSamplePosition());
+        fclose(logFile);
     }
 }
 
@@ -83,58 +81,14 @@ void SyncManager::update(Deck* decks[2]) {
     
     if (!master || !slave) return;
     
-    // Get BPMs
     double master_bpm = master->getBPM();
     double slave_bpm = slave->getBPM();
     
     if (master_bpm <= 0.0 || slave_bpm <= 0.0) return;
     
-    // Match tempo (this is lightweight, do every time)
+    // ONLY match tempo - phase alignment happens once via alignNow()
     double tempo_ratio = master_bpm / slave_bpm;
     slave->setTempo(tempo_ratio);
-    
-    // Phase sync is more expensive and can cause clicks - do it less frequently
-    static int frame_counter = 0;
-    frame_counter++;
-    
-    // Check phase every 3 callbacks (~30ms at 512 samples) - balance between responsiveness and smoothness
-    if (frame_counter < 3) return;
-    frame_counter = 0;
-    
-    // Get phases (0.0 to 1.0)
-    double master_phase = master->getPhase();
-    double slave_phase = slave->getPhase();
-    
-    // Calculate phase difference
-    double phase_diff = master_phase - slave_phase;
-    
-    // Normalize to -0.5 to 0.5 (shortest path)
-    if (phase_diff > 0.5) phase_diff -= 1.0;
-    if (phase_diff < -0.5) phase_diff += 1.0;
-    
-    // Only adjust if phase difference is significant (> 2% of a beat)
-    // Balance between accuracy and avoiding clicks
-    if (std::abs(phase_diff) > 0.02) {
-        // Calculate correction in samples
-        double slave_seconds_per_beat = 60.0 / (slave_bpm * tempo_ratio);
-        int sample_rate = 44100;  // TODO: Get from deck
-        
-        // Convert phase difference to samples
-        int64_t correction_samples = static_cast<int64_t>(
-            phase_diff * slave_seconds_per_beat * sample_rate
-        );
-        
-        // Limit correction size to prevent large jumps (max 50ms for smoother adjustments)
-        int64_t max_correction = sample_rate / 20;  // 50ms
-        correction_samples = std::max<int64_t>(-max_correction, 
-                                               std::min<int64_t>(max_correction, correction_samples));
-        
-        // Apply correction
-        int64_t new_position = slave->getSamplePosition() + correction_samples;
-        if (new_position >= 0) {
-            slave->setSamplePosition(new_position);
-        }
-    }
 }
 
 } // namespace dj

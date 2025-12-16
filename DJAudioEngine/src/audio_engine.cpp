@@ -194,6 +194,26 @@ DJ_API void deck_play(int deck_id) {
     dj::g_engine->decks[deck_id]->play();
 }
 
+DJ_API void deck_play_synced(int deck_id, int master_deck_id) {
+    if (!dj::g_engine || deck_id < 0 || deck_id > 1 || master_deck_id < 0 || master_deck_id > 1) return;
+    
+    dj::Deck* master = dj::g_engine->decks[master_deck_id].get();
+    dj::Deck* slave = dj::g_engine->decks[deck_id].get();
+    
+    // Match tempo
+    double master_bpm = master->getBPM();
+    double slave_bpm = slave->getBPM();
+    if (master_bpm > 0 && slave_bpm > 0) {
+        slave->setTempo(master_bpm / slave_bpm);
+    }
+    
+    // Get master position and add latency compensation
+    // Audio buffer latency = ~2-3 buffers * 512 samples = ~1536 samples (~35ms at 44100Hz)
+    int64_t latency_compensation = 2048;  // ~46ms - tuned for minimal offset
+    int64_t master_pos = master->getSamplePosition() + latency_compensation;
+    slave->play(master_pos);
+}
+
 DJ_API void deck_pause(int deck_id) {
     if (!dj::g_engine || deck_id < 0 || deck_id > 1) return;
     dj::g_engine->decks[deck_id]->pause();

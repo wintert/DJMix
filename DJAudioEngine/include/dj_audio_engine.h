@@ -21,6 +21,7 @@ DJ_API void engine_stop();
 DJ_API int deck_load_track(int deck_id, const char* file_path);
 DJ_API void deck_unload_track(int deck_id);
 DJ_API void deck_play(int deck_id);
+DJ_API void deck_play_synced(int deck_id, int master_deck_id);  // Atomically align and play
 DJ_API void deck_pause(int deck_id);
 DJ_API void deck_stop(int deck_id);
 DJ_API void deck_set_position(int deck_id, double position_seconds);

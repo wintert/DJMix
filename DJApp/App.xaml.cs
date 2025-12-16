@@ -1,15 +1,23 @@
 using DJAutoMixApp.Services;
 using DJAutoMixApp.ViewModels;
+using System.IO;
 using System.Windows;
 
 namespace DJAutoMixApp
 {
     public partial class App : Application
     {
+        public static void Log(string message)
+        {
+            File.AppendAllText(@"c:\Apps\DJApp\debug.log", $"{DateTime.Now:HH:mm:ss} {message}\n");
+        }
+        
         protected override void OnStartup(StartupEventArgs e)
         {
             base.OnStartup(e);
 
+            Log("=== DJ App Starting ===");
+            
             // Initialize C++ audio engine
             int result = AudioEngineInterop.engine_init(44100, 512);
             if (result != 0)

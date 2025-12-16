@@ -14,7 +14,7 @@ namespace DJAutoMixApp.ViewModels
         public DeckViewModel DeckB { get; }
         public PlaylistViewModel Playlist { get; }
 
-        private double crossfaderPosition = 50;
+        private double crossfaderPosition = 0;  // Start at Deck A
         public double CrossfaderPosition
         {
             get => crossfaderPosition;

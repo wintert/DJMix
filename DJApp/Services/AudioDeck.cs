@@ -146,10 +146,13 @@ namespace DJAutoMixApp.Services
             // Enable sync in C++ engine (this deck is slave, master deck is master)
             AudioEngineInterop.sync_enable(deckId, master.deckId);
             
+            DJAutoMixApp.App.Log($"EnableSync: slave={deckId}, master={master.deckId}, slaveIsPlaying={IsPlaying}, masterIsPlaying={master.IsPlaying}");
+            
             // Do immediate initial alignment ONLY if slave is not playing (to avoid clicks)
             // This aligns the stopped deck to the playing master's current phase
             if (!IsPlaying && master.IsPlaying)
             {
+                DJAutoMixApp.App.Log("EnableSync: Calling sync_align_now!");
                 AudioEngineInterop.sync_align_now(deckId, master.deckId);
             }
         }
@@ -163,16 +166,21 @@ namespace DJAutoMixApp.Services
 
         public void Play()
         {
+            DJAutoMixApp.App.Log($"Play: deck={deckId}, IsTrackLoaded={IsTrackLoaded}, IsSyncEnabled={IsSyncEnabled}, masterRef={(masterDeckRef != null ? masterDeckRef.deckId.ToString() : "null")}");
+            
             if (IsTrackLoaded)
             {
-                // If sync is enabled and master is playing, align BEFORE starting playback
-                // This ensures we start perfectly in sync
-                if (IsSyncEnabled && masterDeckRef != null && masterDeckRef.IsPlaying && !IsPlaying)
+                // If sync is enabled, use deck_play_synced which atomically sets position and starts playback
+                if (IsSyncEnabled && masterDeckRef != null && masterDeckRef.IsPlaying)
                 {
-                    AudioEngineInterop.sync_align_now(deckId, masterDeckRef.deckId);
+                    DJAutoMixApp.App.Log($"Play: Using deck_play_synced to start at master position");
+                    AudioEngineInterop.deck_play_synced(deckId, masterDeckRef.deckId);
+                }
+                else
+                {
+                    AudioEngineInterop.deck_play(deckId);
                 }
                 
-                AudioEngineInterop.deck_play(deckId);
                 positionTimer?.Start();
                 PlaybackStarted?.Invoke(this, EventArgs.Empty);
             }

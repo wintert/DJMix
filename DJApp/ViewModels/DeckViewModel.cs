@@ -157,23 +157,31 @@ namespace DJAutoMixApp.ViewModels
 
         private void SyncToDeck(DeckViewModel otherDeck)
         {
+            DJAutoMixApp.App.Log($"SyncToDeck: otherDeck.BPM={otherDeck.BPM}, deck.IsTrackLoaded={deck.IsTrackLoaded}, IsSyncActive={IsSyncActive}");
+            
             if (otherDeck.BPM > 0 && deck.IsTrackLoaded)
             {
                 if (IsSyncActive)
                 {
                     // Disable Sync
+                    DJAutoMixApp.App.Log("SyncToDeck: Disabling sync");
                     deck.DisableSync();
                     IsSyncActive = false;
                 }
                 else
                 {
                     // Enable Continuous Sync
+                    DJAutoMixApp.App.Log("SyncToDeck: Enabling sync");
                     deck.EnableSync(otherDeck.AudioDeck);
                     IsSyncActive = true;
                     
                     // Update displayed BPM immediately
                     BPM = otherDeck.BPM;
                 }
+            }
+            else
+            {
+                DJAutoMixApp.App.Log("SyncToDeck: Conditions not met, sync not executed");
             }
         }
 

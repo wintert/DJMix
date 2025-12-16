@@ -53,7 +53,12 @@ void Deck::unloadTrack() {
     soundtouch_->clear();
 }
 
-void Deck::play() {
+void Deck::play(int64_t startPosition) {
+    if (startPosition >= 0) {
+        // Set position and clear buffer BEFORE starting playback
+        sample_position_ = startPosition;
+        soundtouch_->clear();
+    }
     is_playing_ = true;
 }
 
@@ -96,15 +101,19 @@ void Deck::setPitch(double semitones) {
     soundtouch_->setPitchSemiTones(pitch_semitones_);
 }
 
-void Deck::setSamplePosition(int64_t pos) {
+void Deck::setSamplePosition(int64_t pos, bool forceSync) {
     int64_t old_pos = sample_position_;
     sample_position_ = pos;
     
-    // Only clear SoundTouch buffer for large jumps (user seeks)
-    // Small adjustments from sync should not clear the buffer
-    int64_t jump_size = std::abs(pos - old_pos);
-    if (jump_size > sample_rate_) { // More than 1 second jump
+    // For sync operations, ALWAYS clear the buffer to ensure new samples
+    // For normal seeks, only clear on large jumps to avoid clicks
+    if (forceSync) {
         soundtouch_->clear();
+    } else {
+        int64_t jump_size = std::abs(pos - old_pos);
+        if (jump_size > sample_rate_) { // More than 1 second jump
+            soundtouch_->clear();
+        }
     }
 }
 
@@ -138,6 +147,31 @@ int Deck::readSamples(float* output, int frames) {
     }
     
     std::lock_guard<std::mutex> lock(deck_mutex_);
+    
+    // Bypass SoundTouch when tempo is 1.0 - read directly from audio file
+    // This eliminates SoundTouch's internal latency for perfect sync
+    if (std::abs(tempo_ - 1.0) < 0.001 && std::abs(pitch_semitones_) < 0.1) {
+        int64_t remaining = audio_file_->getTotalSamples() - sample_position_;
+        if (remaining <= 0) {
+            is_playing_ = false;
+            return frames;
+        }
+        
+        int to_read = std::min<int>(frames, static_cast<int>(remaining));
+        const float* source = audio_file_->getData() + (sample_position_ * 2);
+        
+        // Copy directly to output
+        memcpy(output, source, to_read * 2 * sizeof(float));
+        sample_position_ += to_read;
+        
+        // Apply volume and EQ
+        applyEQ(output, to_read);
+        for (int i = 0; i < to_read * 2; ++i) {
+            output[i] *= volume_;
+        }
+        
+        return frames;
+    }
     
     // Feed SoundTouch with source samples
     const int CHUNK_SIZE = 4096;

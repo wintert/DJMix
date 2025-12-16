@@ -125,6 +125,16 @@ namespace DJAutoMixApp.Services
         {
             if (!isAutoMixEnabled) return;
 
+            var deck = sender as AudioDeck;
+            
+            // If we're mixing and the OLD deck (activeDeck) ended, just complete the transition
+            if (isMixing && deck == activeDeck)
+            {
+                // Force complete the transition immediately
+                CompleteMixTransition();
+                return;
+            }
+            
             // If we weren't mixing, just move to next track
             if (!isMixing)
             {
@@ -159,7 +169,7 @@ namespace DJAutoMixApp.Services
                 var mixInPoint = beatDetector.CalculateMixInPoint(nextTrackItem.BPM, 8);
                 nextDeck.SetPosition(mixInPoint);
 
-                // Enable sync to active deck - this will match BPM AND align phase
+                // Enable sync to active deck - this will match BPM
                 if (currentTrack != null && currentTrack.BPM > 0)
                 {
                     nextDeck.EnableSync(activeDeck);
@@ -167,7 +177,19 @@ namespace DJAutoMixApp.Services
                 }
             }
 
-            // Start next track - Play() will call SyncToPhase with latency compensation
+            // Set crossfader to correct starting position BEFORE starting next deck
+            // If Deck A is active, crossfader should be at 0 (full left)
+            // If Deck B is active, crossfader should be at 100 (full right)
+            if (activeDeck == deckA)
+            {
+                CrossfaderPosition = 0;
+            }
+            else
+            {
+                CrossfaderPosition = 100;
+            }
+
+            // Start next track - Play() will use deck_play_synced for beatmatched start
             nextDeck?.Play();
 
             // Start crossfade
@@ -180,7 +202,7 @@ namespace DJAutoMixApp.Services
                 currentStep++;
                 var progress = (double)currentStep / mixSteps;
 
-                // Update crossfader position
+                // Update crossfader position - smooth transition from one side to the other
                 if (activeDeck == deckA)
                 {
                     CrossfaderPosition = progress * 100; // Move from 0 to 100
