@@ -7,22 +7,7 @@
 namespace dj {
 
 // Global engine state
-struct EngineState {
-    std::unique_ptr<Deck> decks[2];
-    std::unique_ptr<Mixer> mixer;
-    std::unique_ptr<SyncManager> sync_manager;
-    
-    PaStream* stream;
-    int sample_rate;
-    int buffer_size;
-    
-    position_callback_t position_callback;
-    track_ended_callback_t track_ended_callback;
-    
-    int callback_counter;  // For throttling UI callbacks
-};
-
-static EngineState* g_engine = nullptr;
+EngineState* g_engine = nullptr;
 
 // PortAudio callback
 static int audioCallback(
@@ -54,8 +39,9 @@ static int audioCallback(
         engine->callback_counter = 0;
         
         if (engine->position_callback) {
-            engine->position_callback(0, engine->decks[0]->getPosition());
-            engine->position_callback(1, engine->decks[1]->getPosition());
+            auto callback = reinterpret_cast<position_callback_t>(engine->position_callback);
+            callback(0, engine->decks[0]->getPosition());
+            callback(1, engine->decks[1]->getPosition());
         }
     }
     
@@ -197,21 +183,81 @@ DJ_API void deck_play(int deck_id) {
 DJ_API void deck_play_synced(int deck_id, int master_deck_id) {
     if (!dj::g_engine || deck_id < 0 || deck_id > 1 || master_deck_id < 0 || master_deck_id > 1) return;
     
+    FILE* logFile = fopen("c:\\Apps\\DJApp\\cpp_debug.log", "a");
+    
     dj::Deck* master = dj::g_engine->decks[master_deck_id].get();
     dj::Deck* slave = dj::g_engine->decks[deck_id].get();
     
-    // Match tempo
     double master_bpm = master->getBPM();
     double slave_bpm = slave->getBPM();
-    if (master_bpm > 0 && slave_bpm > 0) {
-        slave->setTempo(master_bpm / slave_bpm);
+    
+    if (logFile) {
+        fprintf(logFile, "deck_play_synced: master_bpm=%.1f, slave_bpm=%.1f\n", master_bpm, slave_bpm);
     }
     
-    // Get master position and add latency compensation
-    // Audio buffer latency = ~2-3 buffers * 512 samples = ~1536 samples (~35ms at 44100Hz)
-    int64_t latency_compensation = 2048;  // ~46ms - tuned for minimal offset
-    int64_t master_pos = master->getSamplePosition() + latency_compensation;
-    slave->play(master_pos);
+    if (master_bpm <= 0 || slave_bpm <= 0) {
+        // No BPM info, just start playing
+        if (logFile) {
+            fprintf(logFile, "deck_play_synced: No BPM, just playing\n");
+            fclose(logFile);
+        }
+        slave->play();
+        return;
+    }
+    
+    // Match tempo
+    double tempo_ratio = master_bpm / slave_bpm;
+    slave->setTempo(tempo_ratio);
+    
+    if (logFile) {
+        fprintf(logFile, "deck_play_synced: tempo_ratio=%.3f (slave will play at %.1f%% speed)\n", 
+                tempo_ratio, tempo_ratio * 100);
+    }
+    
+    // Calculate sample rates for beat calculations
+    int sample_rate = 44100;
+    
+    // Get master's current phase (0.0 to 1.0 within beat)
+    double master_seconds_per_beat = 60.0 / master_bpm;
+    int64_t master_samples_per_beat = static_cast<int64_t>(master_seconds_per_beat * sample_rate);
+    int64_t master_offset_samples = static_cast<int64_t>(master->getBeatOffset() * sample_rate);
+    int64_t master_adjusted_pos = master->getSamplePosition() - master_offset_samples;
+    double master_phase = fmod(static_cast<double>(master_adjusted_pos), static_cast<double>(master_samples_per_beat));
+    if (master_phase < 0) master_phase += master_samples_per_beat;
+    master_phase = master_phase / master_samples_per_beat;  // Normalize to 0.0-1.0
+    
+    // Calculate slave's target position to match master's phase
+    // Slave tempo is adjusted, so its effective samples per beat changes
+    double slave_seconds_per_beat = 60.0 / (slave_bpm * tempo_ratio);
+    int64_t slave_samples_per_beat = static_cast<int64_t>(slave_seconds_per_beat * sample_rate);
+    int64_t slave_offset_samples = static_cast<int64_t>(slave->getBeatOffset() * sample_rate);
+    
+    // Get slave's current position (from where automix set it via SetPosition)
+    int64_t slave_current_pos = slave->getSamplePosition();
+    int64_t slave_adjusted_pos = slave_current_pos - slave_offset_samples;
+    
+    // Find which beat the slave is currently on
+    int64_t current_beat = slave_adjusted_pos / slave_samples_per_beat;
+    
+    // Calculate target position: same beat number + matching phase
+    int64_t target_pos = slave_offset_samples + 
+                         (current_beat * slave_samples_per_beat) + 
+                         static_cast<int64_t>(master_phase * slave_samples_per_beat);
+    
+    // Add latency compensation
+    int64_t latency_compensation = 512;  // ~12ms at 44100Hz
+    target_pos += latency_compensation;
+    
+    // Ensure target is valid
+    if (target_pos < 0) target_pos = 0;
+    
+    if (logFile) {
+        fprintf(logFile, "deck_play_synced: master_phase=%.3f, target_pos=%lld, starting slave\n", 
+                master_phase, (long long)target_pos);
+        fclose(logFile);
+    }
+    
+    slave->play(target_pos);
 }
 
 DJ_API void deck_pause(int deck_id) {

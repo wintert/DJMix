@@ -50,6 +50,10 @@ DJ_API void sync_enable(int slave_deck_id, int master_deck_id);
 DJ_API void sync_disable(int deck_id);
 DJ_API void sync_align_now(int slave_deck_id, int master_deck_id);  // Immediate one-time alignment
 
+// BPM Analysis (using MiniBPM library)
+DJ_API double audio_analyze_bpm(int deck_id);           // Analyze loaded track for BPM
+DJ_API double audio_analyze_beat_offset(int deck_id, double bpm);  // Find first beat position
+
 // Callbacks (for UI updates)
 typedef void (*position_callback_t)(int deck_id, double position);
 typedef void (*track_ended_callback_t)(int deck_id);

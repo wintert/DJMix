@@ -146,35 +146,57 @@ namespace DJAutoMixApp.Services
 
         private void StartMixTransition()
         {
-            if (isMixing) return;
+            // Guard against multiple calls - set flag immediately
+            if (isMixing) 
+            {
+                DJAutoMixApp.App.Log("StartMix: Already mixing, skipping");
+                return;
+            }
+            isMixing = true;  // Set IMMEDIATELY to prevent race conditions
 
             // Load next track onto the inactive deck
             if (!LoadNextTrackOnNextDeck())
             {
                 StatusChanged?.Invoke(this, "No more tracks in playlist");
+                isMixing = false;  // Reset if no tracks
                 return;
             }
 
-            isMixing = true;
             MixStarted?.Invoke(this, EventArgs.Empty);
             StatusChanged?.Invoke(this, "Mixing tracks...");
 
             // Calculate mix start point for next track (8 bars in)
             var nextTrackItem = playlistManager.NextTrack;
             var currentTrack = playlistManager.CurrentTrack;
+            
+            DJAutoMixApp.App.Log($"StartMix: nextTrack={nextTrackItem?.Title}, BPM={nextTrackItem?.BPM}, currentTrack={currentTrack?.Title}, BPM={currentTrack?.BPM}");
+            DJAutoMixApp.App.Log($"StartMix: nextDeck={nextDeck?.GetHashCode()}, activeDeck={activeDeck?.GetHashCode()}");
 
+            try
+            {
             if (nextTrackItem != null && nextTrackItem.BPM > 0 && nextDeck != null && activeDeck != null)
             {
                 // First seek to mix-in point
                 var mixInPoint = beatDetector.CalculateMixInPoint(nextTrackItem.BPM, 8);
                 nextDeck.SetPosition(mixInPoint);
+                DJAutoMixApp.App.Log($"StartMix: Set nextDeck position to {mixInPoint.TotalSeconds:F2}s");
 
                 // Enable sync to active deck - this will match BPM
                 if (currentTrack != null && currentTrack.BPM > 0)
                 {
+                    DJAutoMixApp.App.Log($"StartMix: Enabling sync on nextDeck to activeDeck");
                     nextDeck.EnableSync(activeDeck);
+                    DJAutoMixApp.App.Log($"StartMix: After EnableSync, IsSyncEnabled={nextDeck.IsSyncEnabled}");
                     StatusChanged?.Invoke(this, $"Beat-syncing: {nextTrackItem.BPM:F1} → {currentTrack.BPM:F1} BPM");
                 }
+                else
+                {
+                    DJAutoMixApp.App.Log($"StartMix: SKIPPED sync - currentTrack null or BPM=0");
+                }
+            }
+            else
+            {
+                DJAutoMixApp.App.Log($"StartMix: SKIPPED sync setup - conditions not met");
             }
 
             // Set crossfader to correct starting position BEFORE starting next deck
@@ -190,6 +212,7 @@ namespace DJAutoMixApp.Services
             }
 
             // Start next track - Play() will use deck_play_synced for beatmatched start
+            DJAutoMixApp.App.Log($"StartMix: About to play nextDeck, IsSyncEnabled={nextDeck?.IsSyncEnabled}");
             nextDeck?.Play();
 
             // Start crossfade
@@ -218,6 +241,14 @@ namespace DJAutoMixApp.Services
                 }
             };
             mixTimer.Start();
+            DJAutoMixApp.App.Log($"StartMix: Timer started for crossfade");
+            }
+            catch (Exception ex)
+            {
+                DJAutoMixApp.App.Log($"StartMix ERROR: {ex.Message}");
+                DJAutoMixApp.App.Log($"StartMix Stack: {ex.StackTrace}");
+                isMixing = false;  // Reset on error
+            }
         }
 
         private void CompleteMixTransition()

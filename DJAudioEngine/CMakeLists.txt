@@ -19,6 +19,7 @@ include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/libs
     ${CMAKE_CURRENT_SOURCE_DIR}/libs/soundtouch/include
     ${CMAKE_CURRENT_SOURCE_DIR}/libs/asiosdk/common
+    ${CMAKE_CURRENT_SOURCE_DIR}/libs/minibpm/src
 )
 
 # Source files
@@ -29,6 +30,8 @@ set(SOURCES
     src/mixer.cpp
     src/sync.cpp
     src/soundtouch_wrap.cpp
+    src/bpm_analyzer.cpp
+    libs/minibpm/src/MiniBpm.cpp
 )
 
 # Create the DLL

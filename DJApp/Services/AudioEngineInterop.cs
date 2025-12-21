@@ -109,5 +109,12 @@ namespace DJAutoMixApp.Services
 
         [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
         public static extern void set_track_ended_callback(TrackEndedCallback callback);
+
+        // BPM Analysis (using MiniBPM library)
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern double audio_analyze_bpm(int deckId);
+
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern double audio_analyze_beat_offset(int deckId, double bpm);
     }
 }

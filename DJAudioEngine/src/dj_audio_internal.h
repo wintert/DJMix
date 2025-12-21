@@ -70,6 +70,10 @@ public:
     // Audio processing
     int readSamples(float* output, int frames);
     
+    // Access to loaded audio data (for BPM analysis)
+    bool isLoaded() const { return audio_file_ != nullptr && audio_file_->getTotalSamples() > 0; }
+    AudioFile* getAudioFile() const { return audio_file_.get(); }
+    
     // Sync support
     int64_t getSamplePosition() const { return sample_position_; }
     void setSamplePosition(int64_t pos, bool forceSync = false);
@@ -133,6 +137,24 @@ private:
     SyncState sync_state_;
     std::mutex sync_mutex_;
 };
+
+// Global engine state - shared across all source files
+struct EngineState {
+    std::unique_ptr<Deck> decks[2];
+    std::unique_ptr<Mixer> mixer;
+    std::unique_ptr<SyncManager> sync_manager;
+    
+    void* stream;  // PaStream*, using void* to avoid PortAudio include in header
+    int sample_rate;
+    int buffer_size;
+    
+    void* position_callback;  // Callbacks stored as void*
+    void* track_ended_callback;
+    
+    int callback_counter;
+};
+
+extern EngineState* g_engine;
 
 } // namespace dj
 

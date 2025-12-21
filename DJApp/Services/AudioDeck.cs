@@ -111,7 +111,7 @@ namespace DJAutoMixApp.Services
             };
         }
 
-        public void LoadTrack(string filePath, double bpm = 120, double beatOffset = 0)
+        public void LoadTrack(string filePath, double bpm = 0, double beatOffset = 0)
         {
             try
             {
@@ -121,8 +121,35 @@ namespace DJAutoMixApp.Services
                 if (result == 0)
                 {
                     CurrentTrackPath = filePath;
-                    BPM = bpm;
-                    BeatOffset = beatOffset;
+                    
+                    // Prefer playlist metadata BPM if provided (more reliable than detection)
+                    if (bpm > 0)
+                    {
+                        BPM = bpm;
+                        // Still analyze beat offset using MiniBPM
+                        double analyzedOffset = AudioEngineInterop.audio_analyze_beat_offset(deckId, bpm);
+                        BeatOffset = analyzedOffset > 0 ? analyzedOffset : beatOffset;
+                        DJAutoMixApp.App.Log($"BPM: deck={deckId}, Using playlist BPM={bpm:F1}, offset={BeatOffset:F3}s");
+                    }
+                    else
+                    {
+                        // No playlist BPM - use MiniBPM to analyze
+                        double analyzedBpm = AudioEngineInterop.audio_analyze_bpm(deckId);
+                        if (analyzedBpm > 0)
+                        {
+                            BPM = analyzedBpm;
+                            double analyzedOffset = AudioEngineInterop.audio_analyze_beat_offset(deckId, analyzedBpm);
+                            BeatOffset = analyzedOffset;
+                            DJAutoMixApp.App.Log($"BPM Analysis: deck={deckId}, BPM={analyzedBpm:F1}, offset={analyzedOffset:F3}s");
+                        }
+                        else
+                        {
+                            // Default
+                            BPM = 120;
+                            BeatOffset = 0;
+                            DJAutoMixApp.App.Log($"BPM: deck={deckId}, defaulting to 120 BPM");
+                        }
+                    }
                 }
                 else
                 {
