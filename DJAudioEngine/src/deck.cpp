@@ -2,6 +2,8 @@
 #include <SoundTouch.h>
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <map>
 
 namespace dj {
 
@@ -94,6 +96,13 @@ double Deck::getDuration() const {
 void Deck::setTempo(double tempo) {
     tempo_ = std::max(0.5, std::min(tempo, 2.0));
     soundtouch_->setTempo(tempo_);
+    
+    // Log tempo change
+    FILE* logFile = fopen("c:\\Apps\\DJApp\\cpp_debug.log", "a");
+    if (logFile) {
+        fprintf(logFile, "Deck::setTempo: tempo=%.3f (%.1f%% speed)\\n", tempo_, tempo_ * 100);
+        fclose(logFile);
+    }
 }
 
 void Deck::setPitch(double semitones) {
@@ -147,6 +156,18 @@ int Deck::readSamples(float* output, int frames) {
     }
     
     std::lock_guard<std::mutex> lock(deck_mutex_);
+    
+    // Log tempo check - use this pointer address as deck identifier
+    // Log every ~second (at 44100 sample rate, 512 frame buffer = ~86 calls/sec)
+    static std::map<void*, int> log_counters;
+    if (log_counters[this]++ % 100 == 0) {
+        FILE* logFile = fopen("c:\\Apps\\DJApp\\cpp_debug.log", "a");
+        if (logFile) {
+            fprintf(logFile, "readSamples[%p]: tempo_=%.3f, bypass=%s, playing=%d\n", 
+                    (void*)this, tempo_, (std::abs(tempo_ - 1.0) < 0.001) ? "YES" : "NO", is_playing_.load());
+            fclose(logFile);
+        }
+    }
     
     // Bypass SoundTouch when tempo is 1.0 - read directly from audio file
     // This eliminates SoundTouch's internal latency for perfect sync

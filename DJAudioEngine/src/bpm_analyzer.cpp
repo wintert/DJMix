@@ -8,6 +8,7 @@
 #include <cmath>
 #include <algorithm>
 #include <vector>
+#include <cstdio>
 
 namespace dj {
 
@@ -38,8 +39,14 @@ double analyzeBPM(const float* samples, int64_t sampleCount, int sampleRate) {
     return bpm.estimateTempo();
 }
 
-// Detect the first beat position using onset detection
-// Returns time in seconds of the first strong beat
+// Simple low-pass filter for bass frequencies
+float lowPassFilter(float input, float& state, float alpha) {
+    state = state + alpha * (input - state);
+    return state;
+}
+
+// Detect the first strong kick/beat using bass-focused transient detection
+// Returns time in seconds of the beat grid offset
 double detectFirstBeat(const float* samples, int64_t sampleCount, int sampleRate, double bpm) {
     if (!samples || sampleCount == 0 || bpm <= 0) return 0.0;
     
@@ -47,33 +54,76 @@ double detectFirstBeat(const float* samples, int64_t sampleCount, int sampleRate
     double secondsPerBeat = 60.0 / bpm;
     int64_t samplesPerBeat = static_cast<int64_t>(secondsPerBeat * sampleRate);
     
-    // Simple onset detection using energy difference
-    // Look at first 10 seconds to find the first strong beat
-    int64_t searchLength = std::min<int64_t>(sampleCount, sampleRate * 10);
+    // Look at first 4 beats to find the downbeat
+    int64_t searchLength = std::min<int64_t>(sampleCount, samplesPerBeat * 4);
     
-    // Window size for energy calculation (about 10ms)
-    int windowSize = sampleRate / 100;
+    // Low-pass filter coefficient (cutoff ~100Hz at 44100)
+    float lpAlpha = 0.01f;
+    float lpState = 0;
     
-    double maxEnergy = 0;
-    int64_t maxPos = 0;
+    // Envelope follower
+    float envState = 0;
+    float envAlpha = 0.001f;
+    float envRelease = 0.0001f;
     
-    // Find the position with highest energy in the first beat period
-    for (int64_t i = 0; i < std::min<int64_t>(searchLength, samplesPerBeat * 2); i += windowSize / 2) {
+    // Window for energy calculation (~23ms at 44100Hz - one hop)
+    int windowSize = 1024;
+    int hopSize = 512;
+    
+    // Calculate bass energy envelope
+    std::vector<double> envelope;
+    double prevEnergy = 0;
+    
+    for (int64_t i = 0; i < searchLength - windowSize; i += hopSize) {
         double energy = 0;
-        for (int j = 0; j < windowSize && (i + j) * 2 + 1 < sampleCount * 2; j++) {
-            float left = samples[(i + j) * 2];
-            float right = samples[(i + j) * 2 + 1];
-            energy += left * left + right * right;
+        
+        for (int j = 0; j < windowSize; j++) {
+            int64_t idx = (i + j) * 2;
+            if (idx + 1 >= sampleCount * 2) break;
+            
+            float mono = (samples[idx] + samples[idx + 1]) / 2.0f;
+            
+            // Low-pass filter to isolate bass
+            float bass = lowPassFilter(mono, lpState, lpAlpha);
+            energy += bass * bass;
         }
         
-        if (energy > maxEnergy) {
-            maxEnergy = energy;
-            maxPos = i;
+        envelope.push_back(energy);
+    }
+    
+    if (envelope.empty()) return 0.0;
+    
+    // Find the first significant transient (positive energy spike)
+    double maxTransient = 0;
+    for (const auto& e : envelope) {
+        if (e > maxTransient) maxTransient = e;
+    }
+    
+    // Threshold at 30% of max
+    double threshold = maxTransient * 0.3;
+    
+    for (size_t i = 1; i < envelope.size(); i++) {
+        double transient = envelope[i] - envelope[i-1];
+        if (transient > threshold && envelope[i] > threshold) {
+            // Found a strong kick - calculate its time
+            int64_t samplePos = i * hopSize;
+            double posSeconds = static_cast<double>(samplePos) / sampleRate;
+            
+            // The offset is this position modulo beat length
+            double offset = fmod(posSeconds, secondsPerBeat);
+            
+            FILE* logFile = fopen("c:\\Apps\\DJApp\\cpp_debug.log", "a");
+            if (logFile) {
+                fprintf(logFile, "detectFirstBeat: found kick at %.3fs, offset=%.3fs\n", posSeconds, offset);
+                fclose(logFile);
+            }
+            
+            return offset;
         }
     }
     
-    // Return position in seconds
-    return static_cast<double>(maxPos) / sampleRate;
+    // Fallback: return 0
+    return 0.0;
 }
 
 } // namespace dj

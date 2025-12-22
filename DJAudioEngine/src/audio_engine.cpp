@@ -196,7 +196,6 @@ DJ_API void deck_play_synced(int deck_id, int master_deck_id) {
     }
     
     if (master_bpm <= 0 || slave_bpm <= 0) {
-        // No BPM info, just start playing
         if (logFile) {
             fprintf(logFile, "deck_play_synced: No BPM, just playing\n");
             fclose(logFile);
@@ -205,55 +204,79 @@ DJ_API void deck_play_synced(int deck_id, int master_deck_id) {
         return;
     }
     
-    // Match tempo
+    // Match tempo - slave will play at master's BPM
     double tempo_ratio = master_bpm / slave_bpm;
     slave->setTempo(tempo_ratio);
     
-    if (logFile) {
-        fprintf(logFile, "deck_play_synced: tempo_ratio=%.3f (slave will play at %.1f%% speed)\n", 
-                tempo_ratio, tempo_ratio * 100);
+    // For same or very similar BPMs (tempo_ratio ~1.0), alignNow already set the position
+    // Just play without additional phase adjustment - this ensures same-song sync works
+    if (std::abs(tempo_ratio - 1.0) < 0.01) {  // Within 1%
+        if (logFile) {
+            fprintf(logFile, "deck_play_synced: tempo_ratio=%.3f (~1.0), using alignNow position, just playing\n", tempo_ratio);
+            fclose(logFile);
+        }
+        slave->play();
+        return;
     }
     
-    // Calculate sample rates for beat calculations
     int sample_rate = 44100;
     
-    // Get master's current phase (0.0 to 1.0 within beat)
-    double master_seconds_per_beat = 60.0 / master_bpm;
-    int64_t master_samples_per_beat = static_cast<int64_t>(master_seconds_per_beat * sample_rate);
-    int64_t master_offset_samples = static_cast<int64_t>(master->getBeatOffset() * sample_rate);
-    int64_t master_adjusted_pos = master->getSamplePosition() - master_offset_samples;
-    double master_phase = fmod(static_cast<double>(master_adjusted_pos), static_cast<double>(master_samples_per_beat));
-    if (master_phase < 0) master_phase += master_samples_per_beat;
-    master_phase = master_phase / master_samples_per_beat;  // Normalize to 0.0-1.0
+    // Get beat offsets (where first beat is in each track)
+    double master_offset = master->getBeatOffset();
+    double slave_offset = slave->getBeatOffset();
     
-    // Calculate slave's target position to match master's phase
-    // Slave tempo is adjusted, so its effective samples per beat changes
-    double slave_seconds_per_beat = 60.0 / (slave_bpm * tempo_ratio);
-    int64_t slave_samples_per_beat = static_cast<int64_t>(slave_seconds_per_beat * sample_rate);
-    int64_t slave_offset_samples = static_cast<int64_t>(slave->getBeatOffset() * sample_rate);
+    // Calculate beat lengths
+    double master_spb = 60.0 / master_bpm;  // master seconds per beat
+    double slave_spb = 60.0 / slave_bpm;    // slave seconds per beat (before tempo change)
     
-    // Get slave's current position (from where automix set it via SetPosition)
-    int64_t slave_current_pos = slave->getSamplePosition();
-    int64_t slave_adjusted_pos = slave_current_pos - slave_offset_samples;
+    // Master's position on its beat grid
+    double master_pos = master->getPosition();
+    double master_grid_pos = master_pos - master_offset;  // Position relative to beat grid
+    double master_phase = fmod(master_grid_pos, master_spb);  // Time since last beat
+    if (master_phase < 0) master_phase += master_spb;
     
-    // Find which beat the slave is currently on
-    int64_t current_beat = slave_adjusted_pos / slave_samples_per_beat;
+    // How long until master's next beat?
+    double master_time_to_next_beat = master_spb - master_phase;
     
-    // Calculate target position: same beat number + matching phase
-    int64_t target_pos = slave_offset_samples + 
-                         (current_beat * slave_samples_per_beat) + 
-                         static_cast<int64_t>(master_phase * slave_samples_per_beat);
+    // The slave should be positioned so that it ALSO has the same time to its next beat
+    // But slave's beat grid has a different timing (slave_spb)
+    // We want: slave_time_to_next_beat = master_time_to_next_beat (after tempo adjustment)
     
-    // Add latency compensation
-    int64_t latency_compensation = 512;  // ~12ms at 44100Hz
-    target_pos += latency_compensation;
+    // After tempo adjustment, slave plays at master_spb timing
+    // So we need slave to have: time_to_beat = master_time_to_next_beat
     
-    // Ensure target is valid
+    // Current slave position (set by automix to mix-in point)
+    double slave_pos = slave->getPosition();
+    double slave_grid_pos = slave_pos - slave_offset;
+    double slave_phase = fmod(slave_grid_pos, slave_spb);
+    if (slave_phase < 0) slave_phase += slave_spb;
+    double slave_time_to_next_beat = slave_spb - slave_phase;
+    
+    // How much to adjust slave? (in slave's original time domain)
+    // We want slave's next beat to occur at the same real-time as master's
+    double adjustment = slave_time_to_next_beat - master_time_to_next_beat;
+    
+    // Wrap to [-half_beat, +half_beat] for shortest adjustment
+    if (adjustment > slave_spb / 2) adjustment -= slave_spb;
+    if (adjustment < -slave_spb / 2) adjustment += slave_spb;
+    
+    int64_t adjustment_samples = static_cast<int64_t>(adjustment * sample_rate);
+    
+    // Calculate new position (moving backwards if adjustment is negative)
+    int64_t slave_current_samples = static_cast<int64_t>(slave_pos * sample_rate);
+    int64_t target_pos = slave_current_samples - adjustment_samples;  // Note: MINUS because we're adjusting time-to-beat
+    
+    // Ensure valid
     if (target_pos < 0) target_pos = 0;
     
     if (logFile) {
-        fprintf(logFile, "deck_play_synced: master_phase=%.3f, target_pos=%lld, starting slave\n", 
-                master_phase, (long long)target_pos);
+        fprintf(logFile, "deck_play_synced: master_offset=%.3f, slave_offset=%.3f\n", master_offset, slave_offset);
+        fprintf(logFile, "deck_play_synced: master_time_to_beat=%.3f, slave_time_to_beat=%.3f\n", 
+                master_time_to_next_beat, slave_time_to_next_beat);
+        fprintf(logFile, "deck_play_synced: adjustment=%.3f sec, samples=%lld\n", 
+                adjustment, (long long)adjustment_samples);
+        fprintf(logFile, "deck_play_synced: starting slave at pos=%lld (%.2f sec)\n",
+                (long long)target_pos, target_pos / (double)sample_rate);
         fclose(logFile);
     }
     
