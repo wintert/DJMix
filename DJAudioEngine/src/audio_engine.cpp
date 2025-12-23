@@ -192,27 +192,27 @@ DJ_API void deck_play_synced(int deck_id, int master_deck_id) {
     double slave_bpm = slave->getBPM();
     
     if (logFile) {
-        fprintf(logFile, "deck_play_synced: master_bpm=%.1f, slave_bpm=%.1f\n", master_bpm, slave_bpm);
+        fprintf(logFile, "=== DJ-STYLE SYNC (FIXED) ===\n");
+        fprintf(logFile, "master_bpm=%.1f, slave_bpm=%.1f\n", master_bpm, slave_bpm);
     }
     
     if (master_bpm <= 0 || slave_bpm <= 0) {
         if (logFile) {
-            fprintf(logFile, "deck_play_synced: No BPM, just playing\n");
+            fprintf(logFile, "No BPM, just playing\n");
             fclose(logFile);
         }
         slave->play();
         return;
     }
     
-    // Match tempo - slave will play at master's BPM
+    // Step 1: Match tempo
     double tempo_ratio = master_bpm / slave_bpm;
     slave->setTempo(tempo_ratio);
     
-    // For same or very similar BPMs (tempo_ratio ~1.0), alignNow already set the position
-    // Just play without additional phase adjustment - this ensures same-song sync works
-    if (std::abs(tempo_ratio - 1.0) < 0.01) {  // Within 1%
+    // Same tempo - alignNow handles it
+    if (std::abs(tempo_ratio - 1.0) < 0.01) {
         if (logFile) {
-            fprintf(logFile, "deck_play_synced: tempo_ratio=%.3f (~1.0), using alignNow position, just playing\n", tempo_ratio);
+            fprintf(logFile, "Same tempo, using alignNow\n");
             fclose(logFile);
         }
         slave->play();
@@ -221,66 +221,65 @@ DJ_API void deck_play_synced(int deck_id, int master_deck_id) {
     
     int sample_rate = 44100;
     
-    // Get beat offsets (where first beat is in each track)
-    double master_offset = master->getBeatOffset();
-    double slave_offset = slave->getBeatOffset();
+    // Step 2: Get beat offsets - the ACTUAL position of the first kick in each track
+    double master_first_kick = master->getBeatOffset();  // e.g., 0.058 sec
+    double slave_first_kick = slave->getBeatOffset();    // e.g., 0.449 sec
     
-    // Calculate beat lengths
-    double master_spb = 60.0 / master_bpm;  // master seconds per beat
-    double slave_spb = 60.0 / slave_bpm;    // slave seconds per beat (before tempo change)
+    // Step 3: Calculate beat intervals
+    double master_spb = 60.0 / master_bpm;  // Seconds per beat in master (real-time)
+    double slave_spb = 60.0 / slave_bpm;    // Seconds per beat in slave (source time)
     
-    // Master's position on its beat grid
+    // Step 4: Find where master is in its beat cycle
+    // Master's beat grid starts at master_first_kick and repeats every master_spb
     double master_pos = master->getPosition();
-    double master_grid_pos = master_pos - master_offset;  // Position relative to beat grid
-    double master_phase = fmod(master_grid_pos, master_spb);  // Time since last beat
+    double master_time_since_first_kick = master_pos - master_first_kick;
+    
+    // How far into the current beat cycle? (phase)
+    double master_phase = fmod(master_time_since_first_kick, master_spb);
     if (master_phase < 0) master_phase += master_spb;
     
-    // How long until master's next beat?
-    double master_time_to_next_beat = master_spb - master_phase;
-    
-    // The slave should be positioned so that it ALSO has the same time to its next beat
-    // But slave's beat grid has a different timing (slave_spb)
-    // We want: slave_time_to_next_beat = master_time_to_next_beat (after tempo adjustment)
-    
-    // After tempo adjustment, slave plays at master_spb timing
-    // So we need slave to have: time_to_beat = master_time_to_next_beat
-    
-    // Current slave position (set by automix to mix-in point)
-    double slave_pos = slave->getPosition();
-    double slave_grid_pos = slave_pos - slave_offset;
-    double slave_phase = fmod(slave_grid_pos, slave_spb);
-    if (slave_phase < 0) slave_phase += slave_spb;
-    double slave_time_to_next_beat = slave_spb - slave_phase;
-    
-    // How much to adjust slave? (in slave's original time domain)
-    // We want slave's next beat to occur at the same real-time as master's
-    double adjustment = slave_time_to_next_beat - master_time_to_next_beat;
-    
-    // Wrap to [-half_beat, +half_beat] for shortest adjustment
-    if (adjustment > slave_spb / 2) adjustment -= slave_spb;
-    if (adjustment < -slave_spb / 2) adjustment += slave_spb;
-    
-    int64_t adjustment_samples = static_cast<int64_t>(adjustment * sample_rate);
-    
-    // Calculate new position (moving backwards if adjustment is negative)
-    int64_t slave_current_samples = static_cast<int64_t>(slave_pos * sample_rate);
-    int64_t target_pos = slave_current_samples - adjustment_samples;  // Note: MINUS because we're adjusting time-to-beat
-    
-    // Ensure valid
-    if (target_pos < 0) target_pos = 0;
+    // Time until master's next kick
+    double time_to_master_kick = master_spb - master_phase;
     
     if (logFile) {
-        fprintf(logFile, "deck_play_synced: master_offset=%.3f, slave_offset=%.3f\n", master_offset, slave_offset);
-        fprintf(logFile, "deck_play_synced: master_time_to_beat=%.3f, slave_time_to_beat=%.3f\n", 
-                master_time_to_next_beat, slave_time_to_next_beat);
-        fprintf(logFile, "deck_play_synced: adjustment=%.3f sec, samples=%lld\n", 
-                adjustment, (long long)adjustment_samples);
-        fprintf(logFile, "deck_play_synced: starting slave at pos=%lld (%.2f sec)\n",
-                (long long)target_pos, target_pos / (double)sample_rate);
+        fprintf(logFile, "Master: pos=%.3f, first_kick=%.3f, phase=%.3fms, time_to_kick=%.1fms\n",
+                master_pos, master_first_kick, master_phase * 1000, time_to_master_kick * 1000);
+    }
+    
+    // Step 5: DJ-STYLE CUE AND START
+    // A DJ cues the incoming track at its first kick (slave_first_kick)
+    // Then presses play when the master hits a kick
+    // 
+    // Since we can't truly "wait", we start the slave NOW at a position
+    // that will bring it to its first kick exactly when master hits its kick
+    //
+    // Slave plays at tempo_ratio speed. In time_to_master_kick real-time seconds,
+    // slave will advance by: time_to_master_kick * tempo_ratio source-seconds
+    
+    double slave_advance = time_to_master_kick * tempo_ratio;
+    
+    // Start slave at: first_kick - advance
+    // So when it advances, it reaches first_kick exactly when master hits its kick
+    double slave_start_pos = slave_first_kick - slave_advance;
+    
+    // If start position is negative (before track start), add one beat period
+    while (slave_start_pos < 0) {
+        slave_start_pos += slave_spb;
+    }
+    
+    int64_t slave_start_samples = static_cast<int64_t>(slave_start_pos * sample_rate);
+    
+    if (logFile) {
+        fprintf(logFile, "Slave: first_kick=%.3f, will_advance=%.3f in %.1fms\n",
+                slave_first_kick, slave_advance, time_to_master_kick * 1000);
+        fprintf(logFile, "Starting slave at %.3f sec (sample %lld)\n",
+                slave_start_pos, (long long)slave_start_samples);
+        fprintf(logFile, "When master hits kick at %.1fms, slave will be at its first kick (%.3f sec)\n",
+                time_to_master_kick * 1000, slave_first_kick);
         fclose(logFile);
     }
     
-    slave->play(target_pos);
+    slave->play(slave_start_samples);
 }
 
 DJ_API void deck_pause(int deck_id) {

@@ -27,6 +27,10 @@ double analyzeBPM(const float* samples, int64_t sampleCount, int sampleRate) {
     // Create MiniBPM analyzer
     breakfastquay::MiniBPM bpm(sampleRate);
     
+    // SET BPM RANGE FOR DANCE MUSIC (100-160 BPM)
+    // This helps avoid half-tempo detection
+    bpm.setBPMRange(100.0, 160.0);
+    
     // Process audio in chunks
     const int chunkSize = 16384;  // Process 16k samples at a time
     for (int64_t i = 0; i < sampleCount; i += chunkSize) {
@@ -35,8 +39,21 @@ double analyzeBPM(const float* samples, int64_t sampleCount, int sampleRate) {
         bpm.process(monoSamples.data() + i, thisChunk);
     }
     
-    // Get the estimated BPM
-    return bpm.estimateTempo();
+    // Get the estimated BPM and candidates
+    double detected = bpm.estimateTempo();
+    std::vector<double> candidates = bpm.getTempoCandidates();
+    
+    FILE* logFile = fopen("c:\\Apps\\DJApp\\cpp_debug.log", "a");
+    if (logFile) {
+        fprintf(logFile, "BPM ANALYSIS: detected=%.1f, candidates=[", detected);
+        for (size_t i = 0; i < std::min(candidates.size(), (size_t)5); i++) {
+            fprintf(logFile, "%.1f%s", candidates[i], (i < 4 && i < candidates.size()-1) ? ", " : "");
+        }
+        fprintf(logFile, "]\n");
+        fclose(logFile);
+    }
+    
+    return detected;
 }
 
 // Simple low-pass filter for bass frequencies
@@ -46,7 +63,7 @@ float lowPassFilter(float input, float& state, float alpha) {
 }
 
 // Detect the first strong kick/beat using bass-focused transient detection
-// Returns time in seconds of the beat grid offset
+// Returns time in seconds where the first kick/beat occurs
 double detectFirstBeat(const float* samples, int64_t sampleCount, int sampleRate, double bpm) {
     if (!samples || sampleCount == 0 || bpm <= 0) return 0.0;
     
@@ -54,17 +71,12 @@ double detectFirstBeat(const float* samples, int64_t sampleCount, int sampleRate
     double secondsPerBeat = 60.0 / bpm;
     int64_t samplesPerBeat = static_cast<int64_t>(secondsPerBeat * sampleRate);
     
-    // Look at first 4 beats to find the downbeat
-    int64_t searchLength = std::min<int64_t>(sampleCount, samplesPerBeat * 4);
+    // Look at first 8 beats to find a reliable kick pattern
+    int64_t searchLength = std::min<int64_t>(sampleCount, samplesPerBeat * 8);
     
     // Low-pass filter coefficient (cutoff ~100Hz at 44100)
     float lpAlpha = 0.01f;
     float lpState = 0;
-    
-    // Envelope follower
-    float envState = 0;
-    float envAlpha = 0.001f;
-    float envRelease = 0.0001f;
     
     // Window for energy calculation (~23ms at 44100Hz - one hop)
     int windowSize = 1024;
@@ -72,7 +84,6 @@ double detectFirstBeat(const float* samples, int64_t sampleCount, int sampleRate
     
     // Calculate bass energy envelope
     std::vector<double> envelope;
-    double prevEnergy = 0;
     
     for (int64_t i = 0; i < searchLength - windowSize; i += hopSize) {
         double energy = 0;
@@ -93,15 +104,22 @@ double detectFirstBeat(const float* samples, int64_t sampleCount, int sampleRate
     
     if (envelope.empty()) return 0.0;
     
-    // Find the first significant transient (positive energy spike)
-    double maxTransient = 0;
+    // Find max energy for threshold calculation
+    double maxEnergy = 0;
     for (const auto& e : envelope) {
-        if (e > maxTransient) maxTransient = e;
+        if (e > maxEnergy) maxEnergy = e;
     }
     
-    // Threshold at 30% of max
-    double threshold = maxTransient * 0.3;
+    // Threshold at 25% of max - look for significant kick energy
+    double threshold = maxEnergy * 0.25;
     
+    FILE* logFile = fopen("c:\\Apps\\DJApp\\cpp_debug.log", "a");
+    if (logFile) {
+        fprintf(logFile, "detectFirstBeat: bpm=%.1f, secondsPerBeat=%.3f, searching %lld samples\n", 
+                bpm, secondsPerBeat, (long long)searchLength);
+    }
+    
+    // Find the first strong transient (positive energy spike above threshold)
     for (size_t i = 1; i < envelope.size(); i++) {
         double transient = envelope[i] - envelope[i-1];
         if (transient > threshold && envelope[i] > threshold) {
@@ -109,20 +127,23 @@ double detectFirstBeat(const float* samples, int64_t sampleCount, int sampleRate
             int64_t samplePos = i * hopSize;
             double posSeconds = static_cast<double>(samplePos) / sampleRate;
             
-            // The offset is this position modulo beat length
-            double offset = fmod(posSeconds, secondsPerBeat);
-            
-            FILE* logFile = fopen("c:\\Apps\\DJApp\\cpp_debug.log", "a");
             if (logFile) {
-                fprintf(logFile, "detectFirstBeat: found kick at %.3fs, offset=%.3fs\n", posSeconds, offset);
+                fprintf(logFile, "detectFirstBeat: FOUND first kick at %.3f seconds (sample %lld)\n", 
+                        posSeconds, (long long)samplePos);
                 fclose(logFile);
             }
             
-            return offset;
+            // Return the ACTUAL position of the first kick - this is where beats start!
+            return posSeconds;
         }
     }
     
-    // Fallback: return 0
+    if (logFile) {
+        fprintf(logFile, "detectFirstBeat: No kick found, returning 0\n");
+        fclose(logFile);
+    }
+    
+    // Fallback: return 0 (assume beat at start)
     return 0.0;
 }
 

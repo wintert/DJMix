@@ -80,15 +80,29 @@ void SyncManager::update(Deck* decks[2]) {
     Deck* slave = decks[slave_id];
     
     if (!master || !slave) return;
+    if (!master->isPlaying() || !slave->isPlaying()) return;
     
     double master_bpm = master->getBPM();
     double slave_bpm = slave->getBPM();
     
     if (master_bpm <= 0.0 || slave_bpm <= 0.0) return;
     
-    // ONLY match tempo - phase alignment happens once via alignNow()
+    // SIMPLE TEMPO MATCH ONLY - no phase correction
+    // This tests if BPM detection and tempo adjustment work correctly
     double tempo_ratio = master_bpm / slave_bpm;
     slave->setTempo(tempo_ratio);
+    
+    // Log occasionally to verify values
+    static int log_counter = 0;
+    if (++log_counter >= 500) {
+        log_counter = 0;
+        FILE* logFile = fopen("c:\\Apps\\DJApp\\cpp_debug.log", "a");
+        if (logFile) {
+            fprintf(logFile, "TEMPO MATCH: master=%.1f BPM, slave=%.1f BPM, ratio=%.3f (%.1f%%)\n",
+                    master_bpm, slave_bpm, tempo_ratio, tempo_ratio * 100);
+            fclose(logFile);
+        }
+    }
 }
 
 } // namespace dj
