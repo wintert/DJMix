@@ -38,6 +38,7 @@ namespace DJAutoMixApp.ViewModels
         public RelayCommand ClearPlaylistCommand { get; }
         public RelayCommand SavePlaylistCommand { get; }
         public RelayCommand LoadPlaylistCommand { get; }
+        public RelayCommand ReAnalyzeBPMCommand { get; }
 
         public PlaylistViewModel(PlaylistManager playlistManager, BeatDetector beatDetector)
         {
@@ -56,6 +57,7 @@ namespace DJAutoMixApp.ViewModels
             ClearPlaylistCommand = new RelayCommand(_ => ClearPlaylist(), _ => Tracks.Count > 0);
             SavePlaylistCommand = new RelayCommand(_ => SavePlaylist(), _ => Tracks.Count > 0);
             LoadPlaylistCommand = new RelayCommand(_ => LoadPlaylist());
+            ReAnalyzeBPMCommand = new RelayCommand(_ => ReAnalyzeBPM(), _ => SelectedTrack != null);
         }
 
         private void OnPlaylistChanged(object? sender, EventArgs e)
@@ -202,6 +204,65 @@ namespace DJAutoMixApp.ViewModels
                 {
                     MessageBox.Show($"Error loading playlist: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
                 }
+            }
+        }
+
+        /// <summary>
+        /// Re-analyze the selected track's BPM using the C++ audio engine (BTrack)
+        /// </summary>
+        private void ReAnalyzeBPM()
+        {
+            if (SelectedTrack == null) return;
+
+            try
+            {
+                // Load track into a temporary deck for analysis
+                int tempDeckId = 0; // Use deck A for analysis
+                int result = AudioEngineInterop.deck_load_track(tempDeckId, SelectedTrack.FilePath);
+                
+                if (result == 0)
+                {
+                    // Analyze using C++ BTrack
+                    double newBpm = AudioEngineInterop.audio_analyze_bpm(tempDeckId);
+                    
+                    if (newBpm > 0)
+                    {
+                        double oldBpm = SelectedTrack.BPM;
+                        SelectedTrack.BPM = newBpm;
+                        
+                        // Re-calculate beat offset
+                        double beatOffset = AudioEngineInterop.audio_analyze_beat_offset(tempDeckId, newBpm);
+                        SelectedTrack.BeatOffset = beatOffset;
+                        
+                        // Re-calculate mix points
+                        SelectedTrack.MixOutPoint = beatDetector.CalculateMixOutPoint(newBpm, SelectedTrack.Duration, 16);
+                        SelectedTrack.MixInPoint = beatDetector.CalculateMixInPoint(newBpm, 8);
+                        
+                        // Force UI update
+                        var index = Tracks.IndexOf(SelectedTrack);
+                        if (index >= 0)
+                        {
+                            Tracks[index] = SelectedTrack;
+                        }
+                        
+                        MessageBox.Show($"BPM re-analyzed: {oldBpm:F1} → {newBpm:F1}", "BPM Analysis", MessageBoxButton.OK, MessageBoxImage.Information);
+                    }
+                    else
+                    {
+                        MessageBox.Show("BPM analysis failed - could not detect tempo.", "Error", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    }
+                    
+                    // Unload temp deck
+                    AudioEngineInterop.deck_unload_track(tempDeckId);
+                }
+                else
+                {
+                    MessageBox.Show("Failed to load track for analysis.", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Error analyzing BPM: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
     }

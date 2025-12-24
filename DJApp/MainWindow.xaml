@@ -380,6 +380,7 @@
                     <WrapPanel Grid.Row="1" Margin="0,10,0,10" HorizontalAlignment="Center">
                         <Button Command="{Binding Playlist.AddTracksCommand}" Style="{StaticResource ModernButton}" Content="➕ Add" Margin="2" Padding="10,5"/>
                         <Button Command="{Binding Playlist.RemoveTrackCommand}" Style="{StaticResource ModernButton}" Content="➖ Remove" Margin="2" Padding="10,5"/>
+                        <Button Command="{Binding Playlist.ReAnalyzeBPMCommand}" Style="{StaticResource ModernButton}" Content="🔄 Re-BPM" Margin="2" Padding="10,5" ToolTip="Re-analyze BPM using C++ engine"/>
                         <Button Command="{Binding Playlist.SavePlaylistCommand}" Style="{StaticResource ModernButton}" Content="💾 Save" Margin="2" Padding="10,5"/>
                         <Button Command="{Binding Playlist.LoadPlaylistCommand}" Style="{StaticResource ModernButton}" Content="📂 Load" Margin="2" Padding="10,5"/>
                         <Button Command="{Binding Playlist.ClearPlaylistCommand}" Style="{StaticResource ModernButton}" Content="🗑️ Clear" Margin="2" Padding="10,5"/>

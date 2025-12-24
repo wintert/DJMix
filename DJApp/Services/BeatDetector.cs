@@ -14,7 +14,7 @@ namespace DJAutoMixApp.Services
         private const int SAMPLE_RATE = 44100;
         
         /// <summary>
-        /// Analyzes an audio file and detects its BPM
+        /// Analyzes an audio file and detects its BPM using C++ QM DSP engine
         /// </summary>
         public Models.TrackInfo AnalyzeTrack(string filePath)
         {
@@ -25,21 +25,60 @@ namespace DJAutoMixApp.Services
 
             try
             {
+                // Get duration using NAudio (fast, doesn't require full load)
                 using (var reader = new AudioFileReader(filePath))
                 {
                     trackInfo.Duration = reader.TotalTime;
+                }
+                
+                // Use C++ QM DSP engine for BPM analysis (same as Mixxx)
+                int tempDeckId = 0; // Use deck 0 for analysis
+                int result = AudioEngineInterop.deck_load_track(tempDeckId, filePath);
+                
+                if (result == 0)
+                {
+                    // Analyze using C++ QM DSP
+                    double bpm = AudioEngineInterop.audio_analyze_bpm(tempDeckId);
+                    double offset = 0;
                     
-                    // Analyze a sample (first 60 seconds)
-                    // Longer analysis = More accurate histogram
-                    var analysisLength = Math.Min(60, (int)reader.TotalTime.TotalSeconds);
-                    var (bpm, offset) = DetectBPM(reader, analysisLength);
+                    if (bpm > 0)
+                    {
+                        offset = AudioEngineInterop.audio_analyze_beat_offset(tempDeckId, bpm);
+                        trackInfo.BPM = bpm;
+                        trackInfo.BPMConfidence = 0.95; // QM DSP is highly accurate
+                    }
+                    else
+                    {
+                        // Fallback to C# analysis if C++ fails
+                        using (var reader = new AudioFileReader(filePath))
+                        {
+                            var analysisLength = Math.Min(60, (int)reader.TotalTime.TotalSeconds);
+                            var (fallbackBpm, fallbackOffset) = DetectBPM(reader, analysisLength);
+                            bpm = fallbackBpm;
+                            offset = fallbackOffset;
+                        }
+                        trackInfo.BPM = bpm;
+                        trackInfo.BPMConfidence = 0.75;
+                    }
                     
-                    trackInfo.BPM = bpm;
-                    trackInfo.BPMConfidence = 0.85; 
                     trackInfo.FirstBeatOffset = offset;
+                    trackInfo.BeatPositions = GenerateBeatGrid(trackInfo.BPM, trackInfo.Duration.TotalSeconds, offset);
                     
-                    // Calculate beat positions based on detected BPM
-                    trackInfo.BeatPositions = GenerateBeatGrid(bpm, reader.TotalTime.TotalSeconds, offset);
+                    // Unload the temp deck
+                    AudioEngineInterop.deck_unload_track(tempDeckId);
+                }
+                else
+                {
+                    // C++ load failed, use fallback C# analysis
+                    using (var reader = new AudioFileReader(filePath))
+                    {
+                        var analysisLength = Math.Min(60, (int)reader.TotalTime.TotalSeconds);
+                        var (bpm, offset) = DetectBPM(reader, analysisLength);
+                        trackInfo.BPM = bpm;
+                        trackInfo.FirstBeatOffset = offset;
+                        trackInfo.BPMConfidence = 0.75;
+                        trackInfo.BeatPositions = GenerateBeatGrid(bpm, reader.TotalTime.TotalSeconds, offset);
+                    }
                 }
             }
             catch (Exception ex)
