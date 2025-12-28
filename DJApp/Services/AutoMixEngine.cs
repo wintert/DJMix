@@ -13,6 +13,9 @@ namespace DJAutoMixApp.Services
         private readonly PlaylistManager playlistManager;
         private readonly BeatDetector beatDetector;
         private System.Timers.Timer? mixTimer;
+        private System.Timers.Timer? tempoRecoveryTimer;
+        private double recoveryStartTempo = 1.0;
+        private const int TEMPO_RECOVERY_SECONDS = 30; // Time to return to original tempo
         
         private AudioDeck? activeDeck;
         private AudioDeck? nextDeck;
@@ -24,6 +27,7 @@ namespace DJAutoMixApp.Services
         public event EventHandler<string>? StatusChanged;
         public event EventHandler? MixStarted;
         public event EventHandler? MixCompleted;
+        public event EventHandler<double>? TempoRecoveryProgressChanged;
 
         private double crossfaderPosition = 0; // 0 = Deck A, 100 = Deck B
         public double CrossfaderPosition
@@ -224,7 +228,6 @@ namespace DJAutoMixApp.Services
             {
                 currentStep++;
                 var progress = (double)currentStep / mixSteps;
-
                 // Update crossfader position - smooth transition from one side to the other
                 if (activeDeck == deckA)
                 {
@@ -234,7 +237,6 @@ namespace DJAutoMixApp.Services
                 {
                     CrossfaderPosition = (1 - progress) * 100; // Move from 100 to 0
                 }
-
                 if (currentStep >= mixSteps)
                 {
                     CompleteMixTransition();
@@ -268,6 +270,9 @@ namespace DJAutoMixApp.Services
             // Disable sync on the new active deck (it's now the master)
             activeDeck?.DisableSync();
 
+            // Start tempo recovery - gradually return to original BPM
+            StartTempoRecovery();
+
             // Move to next track in playlist
             playlistManager.MoveNext();
 
@@ -281,6 +286,69 @@ namespace DJAutoMixApp.Services
             var temp = activeDeck;
             activeDeck = nextDeck;
             nextDeck = temp;
+        }
+
+        private void StartTempoRecovery()
+        {
+            // Stop any existing recovery timer
+            tempoRecoveryTimer?.Stop();
+            tempoRecoveryTimer?.Dispose();
+
+            // Get current tempo (it's synced to the previous track's BPM)
+            // We want to gradually return to 1.0 (original BPM)
+            double currentTempo = AudioEngineInterop.deck_get_tempo(activeDeck == deckA ? 0 : 1);
+            recoveryStartTempo = currentTempo;
+
+            if (Math.Abs(currentTempo - 1.0) < 0.001)
+            {
+                // Already at normal tempo, no recovery needed
+                return;
+            }
+
+            DJAutoMixApp.App.Log($"TempoRecovery: Starting from {currentTempo:F3} -> 1.0 over {TEMPO_RECOVERY_SECONDS}s");
+
+            var recoverySteps = TEMPO_RECOVERY_SECONDS * 10; // Update 10 times per second
+            var currentStep = 0;
+
+            tempoRecoveryTimer = new System.Timers.Timer(100); // 100ms interval
+            tempoRecoveryTimer.AutoReset = true;  // IMPORTANT: Make timer repeat!
+            tempoRecoveryTimer.Elapsed += (s, e) =>
+            {
+                currentStep++;
+                var progress = (double)currentStep / recoverySteps;
+                
+                // Linear interpolation from current tempo to 1.0
+                var newTempo = recoveryStartTempo + (1.0 - recoveryStartTempo) * progress;
+                
+                if (activeDeck != null)
+                {
+                    activeDeck.Tempo = newTempo;
+                }
+
+                // Log every 3 seconds (30 steps)
+                if (currentStep % 30 == 0)
+                {
+                    DJAutoMixApp.App.Log($"TempoRecovery: {progress:P0} complete, tempo={newTempo:F3}");
+                }
+                
+                // Notify UI of progress
+                TempoRecoveryProgressChanged?.Invoke(this, progress);
+
+                if (currentStep >= recoverySteps)
+                {
+                    // Recovery complete
+                    tempoRecoveryTimer?.Stop();
+                    tempoRecoveryTimer?.Dispose();
+                    tempoRecoveryTimer = null;
+                    
+                    if (activeDeck != null)
+                    {
+                        activeDeck.Tempo = 1.0;
+                    }
+                    DJAutoMixApp.App.Log($"TempoRecovery: Complete - tempo now 1.0");
+                }
+            };
+            tempoRecoveryTimer.Start();
         }
 
         private void LoadNextTrackOnActiveDeck()

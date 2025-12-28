@@ -32,6 +32,7 @@ DJ_API int deck_is_playing(int deck_id);
 // Deck parameters
 DJ_API void deck_set_volume(int deck_id, float volume);  // 0.0 - 1.0
 DJ_API void deck_set_tempo(int deck_id, double tempo);   // 0.5 - 2.0
+DJ_API double deck_get_tempo(int deck_id);               // Get current tempo
 DJ_API void deck_set_pitch(int deck_id, double semitones); // -12 to +12
 DJ_API void deck_set_bpm(int deck_id, double bpm);
 DJ_API double deck_get_bpm(int deck_id);

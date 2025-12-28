@@ -5,6 +5,10 @@
         WindowStartupLocation="CenterScreen"
         Background="{StaticResource DarkBackgroundBrush}">
     
+    <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter"/>
+    </Window.Resources>
+
     <Grid Margin="20">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
@@ -36,328 +40,126 @@
             </Grid>
         </Border>
 
-        <!-- Decks and Playlist -->
+        <!-- Main Content Area -->
         <Grid Grid.Row="1">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="2*"/>
-                <ColumnDefinition Width="20"/>
-                <ColumnDefinition Width="1*"/>
-            </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/> <!-- Now Playing -->
+                <RowDefinition Height="20"/>   <!-- Spacer -->
+                <RowDefinition Height="*"/>    <!-- Expanded Playlist -->
+            </Grid.RowDefinitions>
 
-            <!-- Decks Section -->
-            <Grid Grid.Column="0">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="20"/>
-                    <ColumnDefinition Width="*"/>
-                </Grid.ColumnDefinitions>
+            <!-- NOW PLAYING SECTION (Top) -->
+            <Border Grid.Row="0" Background="{StaticResource MediumBackgroundBrush}" 
+                    CornerRadius="8" Padding="20">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="20"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
 
-                <!-- Deck A -->
-                <Border Grid.Column="0" Background="{StaticResource MediumBackgroundBrush}" 
-                        CornerRadius="8" Padding="15"
-                        AllowDrop="True"
-                        DragOver="DeckA_DragOver"
-                        Drop="DeckA_Drop">
-                    <Grid>
+                    <!-- Track Info & Controls -->
+                    <Grid Grid.Column="0">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="*"/>
-                            <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
+
+                        <!-- Title -->
+                        <TextBlock Grid.Row="0" Text="NOW PLAYING" Style="{StaticResource SubHeaderText}" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,0,0,5"/>
+                        <TextBlock Grid.Row="1" Text="{Binding ActiveDeckViewModel.TrackName}" Style="{StaticResource HeaderText}" FontSize="24" TextTrimming="CharacterEllipsis"/>
                         
-                        <TextBlock Grid.Row="0" Text="DECK A" Style="{StaticResource HeaderText}" 
-                                   Foreground="{StaticResource PurpleAccentBrush}" 
-                                   HorizontalAlignment="Center" Margin="0,0,0,10"/>
-                        
-                        <StackPanel Grid.Row="1" Margin="0,0,0,8">
-                            <TextBlock Text="{Binding DeckA.TrackName}" Style="{StaticResource BodyText}"
-                                       FontWeight="SemiBold" TextAlignment="Center" 
-                                       TextWrapping="Wrap" MinHeight="20"/>
-                            
-                            <!-- Waveform Display -->
-                            <Border Height="60" Background="#111" CornerRadius="4" Margin="0,5,0,0" ClipToBounds="True" BorderBrush="#333" BorderThickness="1" Padding="2,5">
+                        <!-- Progress & Waveform -->
+                        <Grid Grid.Row="2" Margin="0,15,0,0">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+
+                            <!-- Waveform -->
+                            <Border Grid.Row="0" Height="80" Background="#111" CornerRadius="4" ClipToBounds="True" BorderBrush="#333" BorderThickness="1" Padding="2,5" Margin="0,0,0,10">
                                 <Grid>
                                     <Viewbox Stretch="Fill">
                                         <Grid>
-                                            <Polyline Points="{Binding DeckA.WaveformPoints}" Stroke="#555" StrokeThickness="1" Fill="#333" Opacity="0.5"/>
-                                            <Polyline Points="{Binding DeckA.WaveformPoints}" Stroke="{StaticResource PurpleAccentBrush}" StrokeThickness="1" Fill="{StaticResource PurpleAccentBrush}">
+                                            <Polyline Points="{Binding ActiveDeckViewModel.WaveformPoints}" Stroke="#555" StrokeThickness="1" Fill="#333" Opacity="0.5"/>
+                                            <Polyline Points="{Binding ActiveDeckViewModel.WaveformPoints}" Stroke="{StaticResource PurpleAccentBrush}" StrokeThickness="1" Fill="{StaticResource PurpleAccentBrush}">
                                                 <Polyline.OpacityMask>
                                                     <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
-                                                        <GradientStop Offset="{Binding DeckA.Progress}" Color="Black"/>
-                                                        <GradientStop Offset="{Binding DeckA.Progress}" Color="Transparent"/>
+                                                        <GradientStop Offset="{Binding ActiveDeckViewModel.Progress}" Color="Black"/>
+                                                        <GradientStop Offset="{Binding ActiveDeckViewModel.Progress}" Color="Transparent"/>
                                                     </LinearGradientBrush>
                                                 </Polyline.OpacityMask>
                                             </Polyline>
-                                            <Path Data="{Binding DeckA.BeatGridGeometry}" Stroke="White" StrokeThickness="5" Opacity="0.6"/>
+                                            <Path Data="{Binding ActiveDeckViewModel.BeatGridGeometry}" Stroke="White" StrokeThickness="5" Opacity="0.6"/>
                                         </Grid>
                                     </Viewbox>
                                 </Grid>
                             </Border>
-                        </StackPanel>
-                        
-                        <ProgressBar Grid.Row="2" Value="{Binding DeckA.ProgressPercentage, Mode=OneWay}" 
-                                     Style="{StaticResource ModernProgressBar}" 
-                                     Margin="0,0,0,5"/>
-                        
-                        <Grid Grid.Row="3" Margin="0,0,0,10">
-                            <TextBlock Text="{Binding DeckA.FormattedPosition}" Style="{StaticResource BodyText}" HorizontalAlignment="Left"/>
-                            <TextBlock Text="{Binding DeckA.FormattedTimeRemaining}" Style="{StaticResource BodyText}" HorizontalAlignment="Right" Foreground="{StaticResource TextSecondaryBrush}"/>
-                        </Grid>
 
-                        <Button Grid.Row="4" Command="{Binding DeckA.PlayPauseCommand}" 
-                                Style="{StaticResource ModernButton}"
-                                Margin="0,0,0,5" Height="40" FontSize="14">
-                            <TextBlock>
-                                <TextBlock.Style>
-                                    <Style TargetType="TextBlock">
-                                        <Setter Property="Text" Value="▶ PLAY"/>
-                                        <Style.Triggers>
-                                            <DataTrigger Binding="{Binding DeckA.IsPlaying}" Value="True">
-                                                <Setter Property="Text" Value="⏸ PAUSE"/>
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </TextBlock.Style>
-                            </TextBlock>
-                        </Button>
-
-                        <!-- Volume and EQ Controls -->
-                        <Grid Grid.Row="5">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="*"/>
-                            </Grid.ColumnDefinitions>
-                            
-                            <!-- Volume -->
-                            <StackPanel Grid.Column="0" Margin="0,0,10,0">
-                                <TextBlock Text="VOLUME" Style="{StaticResource SubHeaderText}" FontSize="10" TextAlignment="Center" Margin="0,0,0,5"/>
-                                <Slider Value="{Binding DeckA.Volume}" Minimum="0" Maximum="100" Orientation="Vertical" Height="100" HorizontalAlignment="Center"/>
-                                <TextBlock Text="{Binding DeckA.Volume, StringFormat='{}{0:F0}%'}" Style="{StaticResource BodyText}" TextAlignment="Center" FontSize="10"/>
-                            </StackPanel>
-                            
-                            <!-- EQ -->
-                            <StackPanel Grid.Column="1">
-                                <TextBlock Text="EQ" Style="{StaticResource SubHeaderText}" FontSize="10" TextAlignment="Center" Margin="0,0,0,5"/>
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="*"/>
-                                    </Grid.ColumnDefinitions>
-                                    <StackPanel Grid.Column="0">
-                                        <TextBlock Text="HI" Style="{StaticResource BodyText}" FontSize="9" TextAlignment="Center"/>
-                                        <Slider Value="{Binding DeckA.EqHigh}" Minimum="0" Maximum="100" Orientation="Vertical" Height="80" HorizontalAlignment="Center"/>
-                                    </StackPanel>
-                                    <StackPanel Grid.Column="1">
-                                        <TextBlock Text="MID" Style="{StaticResource BodyText}" FontSize="9" TextAlignment="Center"/>
-                                        <Slider Value="{Binding DeckA.EqMid}" Minimum="0" Maximum="100" Orientation="Vertical" Height="80" HorizontalAlignment="Center"/>
-                                    </StackPanel>
-                                    <StackPanel Grid.Column="2">
-                                        <TextBlock Text="LO" Style="{StaticResource BodyText}" FontSize="9" TextAlignment="Center"/>
-                                        <Slider Value="{Binding DeckA.EqLow}" Minimum="0" Maximum="100" Orientation="Vertical" Height="80" HorizontalAlignment="Center"/>
-                                    </StackPanel>
+                            <!-- Progress Bar & Time -->
+                            <StackPanel Grid.Row="1">
+                                <ProgressBar Value="{Binding ActiveDeckViewModel.ProgressPercentage, Mode=OneWay}" 
+                                             Style="{StaticResource ModernProgressBar}" Height="6"/>
+                                <Grid Margin="0,5,0,0">
+                                    <TextBlock Text="{Binding ActiveDeckViewModel.FormattedPosition}" Style="{StaticResource BodyText}" HorizontalAlignment="Left" Foreground="#DDD"/>
+                                    <TextBlock Text="{Binding ActiveDeckViewModel.FormattedTimeRemaining}" Style="{StaticResource BodyText}" HorizontalAlignment="Right" Foreground="{StaticResource TextSecondaryBrush}"/>
                                 </Grid>
                             </StackPanel>
                         </Grid>
 
-                        <Grid Grid.Row="6" Margin="0,15,0,0">
-                            <TextBlock Text="{Binding DeckA.BPM, StringFormat='{}{0:F1} BPM'}" 
-                                       Style="{StaticResource SubHeaderText}" 
-                                       TextAlignment="Center"
-                                       Foreground="{StaticResource PurpleAccentBrush}"
-                                       FontSize="14" FontWeight="Bold"
-                                       VerticalAlignment="Center" HorizontalAlignment="Center"
-                                       Margin="0,0,0,30"/>
-                                       
-                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Bottom">
-                                <Button Command="{Binding DeckA.NudgeBackwardCommand}" Content="&lt;&lt;" 
-                                        Style="{StaticResource ModernButton}" 
-                                        Width="30" Height="25" Margin="0,0,5,0" FontSize="10" ToolTip="Nudge Backward (50ms)"/>
-                                        
-                                <Button Command="{Binding DeckA.SyncCommand}" 
-                                        Width="70" Height="25" FontSize="10"
-                                        ToolTip="Sync this deck's tempo to Deck B">
-                                    <Button.Style>
-                                        <Style TargetType="Button" BasedOn="{StaticResource ModernButton}">
-                                            <Setter Property="Content" Value="⚡ SYNC"/>
+                        <!-- Play Controls -->
+                        <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="0,20,0,0">
+                            <Button Command="{Binding ActiveDeckViewModel.PlayPauseCommand}" 
+                                    Style="{StaticResource ModernButton}"
+                                    Width="120" Height="45" FontSize="16" Margin="0,0,15,0">
+                                <TextBlock>
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Text" Value="▶ PLAY"/>
                                             <Style.Triggers>
-                                                <DataTrigger Binding="{Binding DeckA.IsSyncActive}" Value="True">
-                                                    <Setter Property="Background" Value="#10B981"/>
-                                                    <Setter Property="BorderBrush" Value="#059669"/>
-                                                    <Setter Property="Content" Value="🔄 SYNCED"/>
+                                                <DataTrigger Binding="{Binding ActiveDeckViewModel.IsPlaying}" Value="True">
+                                                    <Setter Property="Text" Value="⏸ PAUSE"/>
                                                 </DataTrigger>
                                             </Style.Triggers>
                                         </Style>
-                                    </Button.Style>
-                                </Button>
-                                
-                                <Button Command="{Binding DeckA.NudgeForwardCommand}" Content="&gt;&gt;" 
-                                        Style="{StaticResource ModernButton}" 
-                                        Width="30" Height="25" Margin="5,0,0,0" FontSize="10" ToolTip="Nudge Forward (50ms)"/>
-                            </StackPanel>
-                        </Grid>
-                    </Grid>
-                </Border>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </Button>
 
-                <!-- Deck B -->
-                <Border Grid.Column="2" Background="{StaticResource MediumBackgroundBrush}" 
-                        CornerRadius="8" Padding="15"
-                        AllowDrop="True"
-                        DragOver="DeckB_DragOver"
-                        Drop="DeckB_Drop">
-                    <Grid>
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="*"/>
-                            <RowDefinition Height="Auto"/>
-                        </Grid.RowDefinitions>
-                        
-                        <TextBlock Grid.Row="0" Text="DECK B" Style="{StaticResource HeaderText}" 
-                                   Foreground="{StaticResource BlueAccentBrush}" 
-                                   HorizontalAlignment="Center" Margin="0,0,0,10"/>
-                        
-                        <StackPanel Grid.Row="1" Margin="0,0,0,8">
-                            <TextBlock Text="{Binding DeckB.TrackName}" Style="{StaticResource BodyText}" 
-                                       FontWeight="SemiBold" TextAlignment="Center" 
-                                       TextWrapping="Wrap" MinHeight="20"/>
-
-                            <!-- Waveform Display -->
-                            <Border Height="60" Background="#111" CornerRadius="4" Margin="0,5,0,0" ClipToBounds="True" BorderBrush="#333" BorderThickness="1" Padding="2,5">
-                                <Grid>
-                                    <Viewbox Stretch="Fill">
-                                        <Grid>
-                                            <Polyline Points="{Binding DeckB.WaveformPoints}" Stroke="#555" StrokeThickness="1" Fill="#333" Opacity="0.5"/>
-                                            <Polyline Points="{Binding DeckB.WaveformPoints}" Stroke="{StaticResource BlueAccentBrush}" StrokeThickness="1" Fill="{StaticResource BlueAccentBrush}">
-                                                <Polyline.OpacityMask>
-                                                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
-                                                        <GradientStop Offset="{Binding DeckB.Progress}" Color="Black"/>
-                                                        <GradientStop Offset="{Binding DeckB.Progress}" Color="Transparent"/>
-                                                    </LinearGradientBrush>
-                                                </Polyline.OpacityMask>
-                                            </Polyline>
-                                            <Path Data="{Binding DeckB.BeatGridGeometry}" Stroke="White" StrokeThickness="5" Opacity="0.6"/>
-                                        </Grid>
-                                    </Viewbox>
-                                </Grid>
+                            <!-- BPM Display -->
+                            <Border Background="#222" CornerRadius="4" Padding="15,0" Height="45" BorderBrush="#333" BorderThickness="1">
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                    <TextBlock Text="{Binding ActiveDeckViewModel.EffectiveBPM, StringFormat='{}{0:F1}'}" FontWeight="Bold" FontSize="20" Foreground="{StaticResource PurpleAccentBrush}" VerticalAlignment="Bottom"/>
+                                    <TextBlock Text=" BPM" FontSize="10" Foreground="#888" VerticalAlignment="Bottom" Margin="3,0,0,4"/>
+                                </StackPanel>
                             </Border>
+
+                            <!-- Volume Slider -->
+                            <StackPanel VerticalAlignment="Center" Margin="20,0,0,0" Width="150">
+                                <TextBlock Text="VOLUME" FontSize="10" Foreground="#888" TextAlignment="Center" Margin="0,0,0,2"/>
+                                <Slider Value="{Binding ActiveDeckViewModel.Volume}" Minimum="0" Maximum="100" Style="{StaticResource ModernSlider}"/>
+                            </StackPanel>
                         </StackPanel>
-                        
-                        <ProgressBar Grid.Row="2" Value="{Binding DeckB.ProgressPercentage, Mode=OneWay}" 
-                                     Style="{StaticResource ModernProgressBar}" 
-                                     Foreground="{StaticResource BlueAccentBrush}"
-                                     Margin="0,0,0,5"/>
-                        
-                        <Grid Grid.Row="3" Margin="0,0,0,10">
-                            <TextBlock Text="{Binding DeckB.FormattedPosition}" Style="{StaticResource BodyText}" HorizontalAlignment="Left"/>
-                            <TextBlock Text="{Binding DeckB.FormattedTimeRemaining}" Style="{StaticResource BodyText}" HorizontalAlignment="Right" Foreground="{StaticResource TextSecondaryBrush}"/>
-                        </Grid>
-
-                        <Button Grid.Row="4" Command="{Binding DeckB.PlayPauseCommand}" 
-                                Style="{StaticResource BlueButton}"
-                                Margin="0,0,0,5" Height="40" FontSize="14">
-                            <TextBlock>
-                                <TextBlock.Style>
-                                    <Style TargetType="TextBlock">
-                                        <Setter Property="Text" Value="▶ PLAY"/>
-                                        <Style.Triggers>
-                                            <DataTrigger Binding="{Binding DeckB.IsPlaying}" Value="True">
-                                                <Setter Property="Text" Value="⏸ PAUSE"/>
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </TextBlock.Style>
-                            </TextBlock>
-                        </Button>
-
-                        <!-- Volume and EQ Controls -->
-                        <Grid Grid.Row="5">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="*"/>
-                            </Grid.ColumnDefinitions>
-                            
-                            <!-- Volume -->
-                            <StackPanel Grid.Column="0" Margin="0,0,10,0">
-                                <TextBlock Text="VOLUME" Style="{StaticResource SubHeaderText}" FontSize="10" TextAlignment="Center" Margin="0,0,0,5"/>
-                                <Slider Value="{Binding DeckB.Volume}" Minimum="0" Maximum="100" Orientation="Vertical" Height="100" HorizontalAlignment="Center"/>
-                                <TextBlock Text="{Binding DeckB.Volume, StringFormat='{}{0:F0}%'}" Style="{StaticResource BodyText}" TextAlignment="Center" FontSize="10"/>
-                            </StackPanel>
-                            
-                            <!-- EQ -->
-                            <StackPanel Grid.Column="1">
-                                <TextBlock Text="EQ" Style="{StaticResource SubHeaderText}" FontSize="10" TextAlignment="Center" Margin="0,0,0,5"/>
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="*"/>
-                                    </Grid.ColumnDefinitions>
-                                    <StackPanel Grid.Column="0">
-                                        <TextBlock Text="HI" Style="{StaticResource BodyText}" FontSize="9" TextAlignment="Center"/>
-                                        <Slider Value="{Binding DeckB.EqHigh}" Minimum="0" Maximum="100" Orientation="Vertical" Height="80" HorizontalAlignment="Center"/>
-                                    </StackPanel>
-                                    <StackPanel Grid.Column="1">
-                                        <TextBlock Text="MID" Style="{StaticResource BodyText}" FontSize="9" TextAlignment="Center"/>
-                                        <Slider Value="{Binding DeckB.EqMid}" Minimum="0" Maximum="100" Orientation="Vertical" Height="80" HorizontalAlignment="Center"/>
-                                    </StackPanel>
-                                    <StackPanel Grid.Column="2">
-                                        <TextBlock Text="LO" Style="{StaticResource BodyText}" FontSize="9" TextAlignment="Center"/>
-                                        <Slider Value="{Binding DeckB.EqLow}" Minimum="0" Maximum="100" Orientation="Vertical" Height="80" HorizontalAlignment="Center"/>
-                                    </StackPanel>
-                                </Grid>
-                            </StackPanel>
-                        </Grid>
-
-                        <Grid Grid.Row="6" Margin="0,15,0,0">
-                            <TextBlock Text="{Binding DeckB.BPM, StringFormat='{}{0:F1} BPM'}" 
-                                       Style="{StaticResource SubHeaderText}" 
-                                       TextAlignment="Center"
-                                       Foreground="{StaticResource BlueAccentBrush}"
-                                       FontSize="14" FontWeight="Bold"
-                                       VerticalAlignment="Center" HorizontalAlignment="Center"
-                                       Margin="0,0,0,30"/>
-                                       
-                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Bottom">
-                                <Button Command="{Binding DeckB.NudgeBackwardCommand}" Content="&lt;&lt;" 
-                                        Style="{StaticResource BlueButton}" 
-                                        Width="30" Height="25" Margin="0,0,5,0" FontSize="10" ToolTip="Nudge Backward (50ms)"/>
-                                
-                                <Button Command="{Binding DeckB.SyncCommand}" 
-                                        Width="70" Height="25" FontSize="10"
-                                        ToolTip="Sync this deck's tempo to Deck A">
-                                    <Button.Style>
-                                        <Style TargetType="Button" BasedOn="{StaticResource BlueButton}">
-                                            <Setter Property="Content" Value="⚡ SYNC"/>
-                                            <Style.Triggers>
-                                                <DataTrigger Binding="{Binding DeckB.IsSyncActive}" Value="True">
-                                                    <Setter Property="Background" Value="#10B981"/>
-                                                    <Setter Property="BorderBrush" Value="#059669"/>
-                                                    <Setter Property="Content" Value="🔄 SYNCED"/>
-                                                </DataTrigger>
-                                            </Style.Triggers>
-                                        </Style>
-                                    </Button.Style>
-                                </Button>
-                                
-                                <Button Command="{Binding DeckB.NudgeForwardCommand}" Content="&gt;&gt;" 
-                                        Style="{StaticResource BlueButton}" 
-                                        Width="30" Height="25" Margin="5,0,0,0" FontSize="10" ToolTip="Nudge Forward (50ms)"/>
-                            </StackPanel>
-                        </Grid>
                     </Grid>
-                </Border>
-            </Grid>
+                    
+                    <!-- Drag & Drop Zone Hint -->
+                    <Border Grid.Column="2" BorderBrush="#333" BorderThickness="2" CornerRadius="8" Width="150" Background="#1A1A1A"
+                             AllowDrop="True"
+                             DragOver="DeckA_DragOver"
+                             Drop="DeckA_Drop">
+                        <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                             <TextBlock Text="📥" FontSize="30" HorizontalAlignment="Center" Margin="0,0,0,10"/>
+                             <TextBlock Text="Drop Track Here" FontSize="12" Foreground="#888" TextAlignment="Center"/>
+                             <TextBlock Text="(Deck A/B)" FontSize="10" Foreground="#555" TextAlignment="Center" Margin="0,5,0,0"/>
+                        </StackPanel>
+                    </Border>
+                </Grid>
+            </Border>
 
-            <!-- Playlist Panel with Drag-Drop -->
-            <Border Grid.Column="2" Background="{StaticResource MediumBackgroundBrush}" 
+            <!-- PLAYLIST SECTION (Center - Expanded) -->
+            <Border Grid.Row="2" Background="{StaticResource MediumBackgroundBrush}" 
                     CornerRadius="8" Padding="15"
                     AllowDrop="True" 
                     Drop="Playlist_Drop"
@@ -369,47 +171,56 @@
                         <RowDefinition Height="*"/>
                     </Grid.RowDefinitions>
 
-                    <TextBlock Grid.Row="0" Text="PLAYLIST" Style="{StaticResource HeaderText}" 
-                               Margin="0,0,0,10" HorizontalAlignment="Center"/>
-                    
-                    <TextBlock Grid.Row="0" Text="(Drag files here)" Style="{StaticResource BodyText}" 
-                               FontSize="10" Foreground="{StaticResource TextSecondaryBrush}"
-                               HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,-5"/>
+                    <Grid Grid.Row="0" Margin="0,0,0,10">
+                        <TextBlock Text="PLAYLIST" Style="{StaticResource HeaderText}" VerticalAlignment="Bottom"/>
+                        <TextBlock Text="(Drag files to add)" Style="{StaticResource BodyText}" 
+                                   FontSize="12" Foreground="{StaticResource TextSecondaryBrush}"
+                                   HorizontalAlignment="Right" VerticalAlignment="Bottom"/>
+                    </Grid>
 
                     <!-- Playlist Controls -->
-                    <WrapPanel Grid.Row="1" Margin="0,10,0,10" HorizontalAlignment="Center">
-                        <Button Command="{Binding Playlist.AddTracksCommand}" Style="{StaticResource ModernButton}" Content="➕ Add" Margin="2" Padding="10,5"/>
-                        <Button Command="{Binding Playlist.RemoveTrackCommand}" Style="{StaticResource ModernButton}" Content="➖ Remove" Margin="2" Padding="10,5"/>
-                        <Button Command="{Binding Playlist.ReAnalyzeBPMCommand}" Style="{StaticResource ModernButton}" Content="🔄 Re-BPM" Margin="2" Padding="10,5" ToolTip="Re-analyze BPM using C++ engine"/>
-                        <Button Command="{Binding Playlist.SavePlaylistCommand}" Style="{StaticResource ModernButton}" Content="💾 Save" Margin="2" Padding="10,5"/>
-                        <Button Command="{Binding Playlist.LoadPlaylistCommand}" Style="{StaticResource ModernButton}" Content="📂 Load" Margin="2" Padding="10,5"/>
-                        <Button Command="{Binding Playlist.ClearPlaylistCommand}" Style="{StaticResource ModernButton}" Content="🗑️ Clear" Margin="2" Padding="10,5"/>
+                    <WrapPanel Grid.Row="1" Margin="0,0,0,15">
+                        <Button Command="{Binding Playlist.AddTracksCommand}" Style="{StaticResource ModernButton}" Content="➕ Add Tracks" Margin="0,0,5,0" Padding="15,8"/>
+                        <Button Command="{Binding Playlist.RemoveTrackCommand}" Style="{StaticResource ModernButton}" Content="➖ Remove" Margin="0,0,5,0" Padding="15,8"/>
+                        <Button Command="{Binding Playlist.ReAnalyzeBPMCommand}" Style="{StaticResource ModernButton}" Content="🔄 Re-Analyze" Margin="0,0,5,0" Padding="15,8"/>
+                        <Button Command="{Binding Playlist.ClearPlaylistCommand}" Style="{StaticResource ModernButton}" Content="🗑️ Clear All" Margin="0,0,5,0" Padding="15,8"/>
                     </WrapPanel>
 
-                    <!-- Playlist Items -->
+                    <!-- Large Playlist Items -->
                     <ListBox Grid.Row="2" 
                              ItemsSource="{Binding Playlist.Tracks}"
                              SelectedItem="{Binding Playlist.SelectedTrack}"
                              Style="{StaticResource ModernListBox}"
                              ItemContainerStyle="{StaticResource PlaylistItemStyle}"
-                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                             FontSize="14"
                              AllowDrop="True">
                         <ListBox.ItemTemplate>
                             <DataTemplate>
-                                <Grid>
+                                <Grid Margin="0,8">
                                     <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
                                         <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
                                         <ColumnDefinition Width="Auto"/>
                                     </Grid.ColumnDefinitions>
                                     
-                                    <StackPanel Grid.Column="0">
-                                        <TextBlock Text="{Binding Title}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
-                                        <TextBlock FontSize="10" Foreground="{StaticResource TextSecondaryBrush}">
-                                            <Run Text="{Binding Duration, StringFormat='{}{0:mm\\:ss}'}"/>
-                                            <Run Text=" • "/>
-                                            <Run Text="{Binding BPM, StringFormat='{}{0:F0} BPM'}"/>
-                                        </TextBlock>
+                                    <!-- Play Icon -->
+                                    <TextBlock Text="🎵" Grid.Column="0" VerticalAlignment="Center" Margin="0,0,15,0" Opacity="0.5"/>
+                                    
+                                    <!-- Title & Artist -->
+                                    <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                        <TextBlock Text="{Binding Title}" FontWeight="SemiBold" FontSize="15" Foreground="#EEE"/>
+                                        <!-- Placeholder Artist if we had it, for now just path or duration hint -->
                                     </StackPanel>
+
+                                    <!-- Duration -->
+                                    <TextBlock Grid.Column="2" Text="{Binding Duration, StringFormat='{}{0:mm\\:ss}'}" 
+                                               Foreground="{StaticResource TextSecondaryBrush}" VerticalAlignment="Center" Margin="0,0,20,0"/>
+                                    
+                                    <!-- BPM Badge -->
+                                    <Border Grid.Column="3" Background="#222" CornerRadius="4" Padding="8,4" BorderBrush="#333" BorderThickness="1">
+                                        <TextBlock Text="{Binding BPM, StringFormat='{}{0:F0} BPM'}" FontWeight="Bold" Foreground="{StaticResource PurpleAccentBrush}" FontSize="12"/>
+                                    </Border>
                                 </Grid>
                             </DataTemplate>
                         </ListBox.ItemTemplate>
@@ -418,61 +229,67 @@
             </Border>
         </Grid>
 
-        <!-- Crossfader and Settings Section -->
-        <Border Grid.Row="2" Background="{StaticResource MediumBackgroundBrush}" 
-                CornerRadius="8" Padding="20,15" Margin="0,20,0,0">
+        <!-- Auto-Mix and Stop Buttons -->
+        <Grid Grid.Row="3" Margin="0,15,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            
+            <Button Grid.Column="0" Command="{Binding ToggleAutoMixCommand}"
+                    Height="60" Margin="0,0,10,0"
+                    FontSize="18" FontWeight="Bold">
+                <Button.Style>
+                    <Style TargetType="Button" BasedOn="{StaticResource ModernButton}">
+                        <Setter Property="Content" Value="🎵 START AUTO-MIX"/>
+                        <Setter Property="Background">
+                            <Setter.Value>
+                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                                    <GradientStop Color="{StaticResource PurpleAccent}" Offset="0"/>
+                                    <GradientStop Color="{StaticResource BlueAccent}" Offset="1"/>
+                                </LinearGradientBrush>
+                            </Setter.Value>
+                        </Setter>
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding IsAutoMixEnabled}" Value="True">
+                                <Setter Property="Content" Value="⏹️ STOP AUTO-MIX"/>
+                                <Setter Property="Background" Value="#EF4444"/>
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </Button.Style>
+            </Button>
+            
+            <Button Grid.Column="1" Command="{Binding StopAllCommand}"
+                    Height="60" Width="120"
+                    FontSize="14" FontWeight="Bold"
+                    Content="⏹ STOP ALL"
+                    ToolTip="Stop all playback and reset">
+                <Button.Style>
+                    <Style TargetType="Button" BasedOn="{StaticResource ModernButton}">
+                        <Setter Property="Background" Value="#6B7280"/>
+                    </Style>
+                </Button.Style>
+            </Button>
+        </Grid>
+
+        <!-- Status Bar -->
+        <Border Grid.Row="4" Background="{StaticResource LightBackgroundBrush}" 
+                CornerRadius="6" Padding="15,10" Margin="0,15,0,0">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
                 
-                <!-- Crossfader -->
-                <StackPanel Grid.Column="0">
-                    <TextBlock Text="CROSSFADER (A ← → B)" Style="{StaticResource SubHeaderText}" TextAlignment="Center" Margin="0,0,0,10"/>
-                    <Slider Value="{Binding CrossfaderPosition}" Minimum="0" Maximum="100" Style="{StaticResource ModernSlider}" TickFrequency="10" IsSnapToTickEnabled="False"/>
-                </StackPanel>
-                
-                <!-- Crossfade Duration Setting -->
-                <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="30,0,0,0" Width="150">
-                    <TextBlock Text="CROSSFADE TIME" Style="{StaticResource SubHeaderText}" FontSize="10" TextAlignment="Center" Margin="0,0,0,5"/>
-                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
-                        <Slider Value="{Binding CrossfadeDuration}" Minimum="5" Maximum="30" Width="80" VerticalAlignment="Center"/>
-                        <TextBlock Text="{Binding CrossfadeDuration, StringFormat='{}{0}s'}" Style="{StaticResource BodyText}" VerticalAlignment="Center" Margin="10,0,0,0" FontWeight="Bold"/>
-                    </StackPanel>
+                <TextBlock Grid.Column="0" Text="{Binding StatusMessage}" Style="{StaticResource BodyText}" TextAlignment="Center" FontSize="12"/>
+
+                <!-- Tempo Recovery Progress -->
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Visibility="{Binding IsTempoRecoveryActive, Converter={StaticResource BooleanToVisibilityConverter}}">
+                    <TextBlock Text="Tempo Recovery:" Style="{StaticResource BodyText}" FontSize="10" VerticalAlignment="Center" Margin="0,0,5,0"/>
+                    <ProgressBar Value="{Binding TempoRecoveryProgress}" Width="100" Height="10" Style="{StaticResource ModernProgressBar}"/>
                 </StackPanel>
             </Grid>
-        </Border>
-
-        <!-- Auto-Mix Button -->
-        <Button Grid.Row="3" Command="{Binding ToggleAutoMixCommand}"
-                Height="60" Margin="0,15,0,0"
-                FontSize="18" FontWeight="Bold">
-            <Button.Style>
-                <Style TargetType="Button" BasedOn="{StaticResource ModernButton}">
-                    <Setter Property="Content" Value="🎵 START AUTO-MIX"/>
-                    <Setter Property="Background">
-                        <Setter.Value>
-                            <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
-                                <GradientStop Color="{StaticResource PurpleAccent}" Offset="0"/>
-                                <GradientStop Color="{StaticResource BlueAccent}" Offset="1"/>
-                            </LinearGradientBrush>
-                        </Setter.Value>
-                    </Setter>
-                    <Style.Triggers>
-                        <DataTrigger Binding="{Binding IsAutoMixEnabled}" Value="True">
-                            <Setter Property="Content" Value="⏹️ STOP AUTO-MIX"/>
-                            <Setter Property="Background" Value="#EF4444"/>
-                        </DataTrigger>
-                    </Style.Triggers>
-                </Style>
-            </Button.Style>
-        </Button>
-
-        <!-- Status Bar -->
-        <Border Grid.Row="4" Background="{StaticResource LightBackgroundBrush}" 
-                CornerRadius="6" Padding="15,10" Margin="0,15,0,0">
-            <TextBlock Text="{Binding StatusMessage}" Style="{StaticResource BodyText}" TextAlignment="Center" FontSize="12"/>
         </Border>
     </Grid>
 </Window>

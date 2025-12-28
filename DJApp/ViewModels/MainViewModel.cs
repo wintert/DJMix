@@ -71,6 +71,29 @@ namespace DJAutoMixApp.ViewModels
             }
         }
 
+        // Tempo Recovery
+        private double tempoRecoveryProgress;
+        public double TempoRecoveryProgress
+        {
+            get => tempoRecoveryProgress;
+            set => SetProperty(ref tempoRecoveryProgress, value);
+        }
+
+        private bool isTempoRecoveryActive;
+        public bool IsTempoRecoveryActive
+        {
+            get => isTempoRecoveryActive;
+            set => SetProperty(ref isTempoRecoveryActive, value);
+        }
+
+        // Active Deck (for Single Player View)
+        private DeckViewModel activeDeckViewModel;
+        public DeckViewModel ActiveDeckViewModel
+        {
+            get => activeDeckViewModel;
+            set => SetProperty(ref activeDeckViewModel, value);
+        }
+
         public RelayCommand ToggleAutoMixCommand { get; }
 
         public MainViewModel(
@@ -89,6 +112,9 @@ namespace DJAutoMixApp.ViewModels
             DeckA = new DeckViewModel(deckA);
             DeckB = new DeckViewModel(deckB);
             Playlist = new PlaylistViewModel(playlistManager, beatDetector);
+            
+            // Default to Deck A
+            ActiveDeckViewModel = DeckA;
 
             // Initialize sync commands (each deck can sync to the other)
             DeckA.InitializeSyncCommand(DeckB);
@@ -98,6 +124,17 @@ namespace DJAutoMixApp.ViewModels
             autoMixEngine.CrossfaderPositionChanged += (s, pos) =>
             {
                 CrossfaderPosition = pos;
+                
+                // Switch active deck view based on crossfader dominance
+                // Seamlessly switch when passing 50%
+                if (pos < 50 && ActiveDeckViewModel != DeckA)
+                {
+                    ActiveDeckViewModel = DeckA;
+                }
+                else if (pos > 50 && ActiveDeckViewModel != DeckB)
+                {
+                    ActiveDeckViewModel = DeckB;
+                }
             };
 
             autoMixEngine.StatusChanged += (s, status) =>
@@ -123,10 +160,54 @@ namespace DJAutoMixApp.ViewModels
                 }
             };
 
+            autoMixEngine.TempoRecoveryProgressChanged += (s, progress) =>
+            {
+                // Update on UI thread
+                System.Windows.Application.Current.Dispatcher.Invoke(() =>
+                {
+                    IsTempoRecoveryActive = progress < 1.0;
+                    TempoRecoveryProgress = progress * 100; // Convert 0-1 to percentage
+                    
+                    if (progress >= 1.0)
+                    {
+                        StatusMessage = "Tempo Recovery Complete";
+                    }
+                    else
+                    {
+                        StatusMessage = $"Recovering Tempo: {progress:P0}";
+                    }
+                });
+            };
+
             ToggleAutoMixCommand = new RelayCommand(
                 _ => IsAutoMixEnabled = !IsAutoMixEnabled,
                 _ => Playlist.Tracks.Count > 0
             );
+
+            StopAllCommand = new RelayCommand(_ =>
+            {
+                // Stop auto-mix
+                IsAutoMixEnabled = false;
+                
+                // Stop both decks
+                deckA.Stop();
+                deckB.Stop();
+                
+                // Reset crossfader to center
+                CrossfaderPosition = 50;
+                
+                // Reset tempo on both decks
+                deckA.Tempo = 1.0;
+                deckB.Tempo = 1.0;
+                
+                // Clear deck displays
+                DeckA.UpdateTrackInfo("", TimeSpan.Zero, 0);
+                DeckB.UpdateTrackInfo("", TimeSpan.Zero, 0);
+                
+                StatusMessage = "Stopped - Ready";
+            });
         }
+
+        public RelayCommand StopAllCommand { get; }
     }
 }

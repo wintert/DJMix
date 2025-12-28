@@ -192,8 +192,10 @@ DJ_API void deck_play_synced(int deck_id, int master_deck_id) {
     double slave_bpm = slave->getBPM();
     
     if (logFile) {
-        fprintf(logFile, "=== DJ-STYLE SYNC (FIXED) ===\n");
-        fprintf(logFile, "master_bpm=%.1f, slave_bpm=%.1f\n", master_bpm, slave_bpm);
+        fprintf(logFile, "=== DJ-STYLE SYNC ===\n");
+        fprintf(logFile, "MASTER (deck %d): BPM=%.1f, tempo=%.3f, effective_BPM=%.1f\n", 
+                master_deck_id, master_bpm, master->getTempo(), master_bpm * master->getTempo());
+        fprintf(logFile, "SLAVE  (deck %d): BPM=%.1f (next song)\n", deck_id, slave_bpm);
     }
     
     if (master_bpm <= 0 || slave_bpm <= 0) {
@@ -206,7 +208,19 @@ DJ_API void deck_play_synced(int deck_id, int master_deck_id) {
     }
     
     // Step 1: Match tempo
-    double tempo_ratio = master_bpm / slave_bpm;
+    double master_tempo = master->getTempo();
+    double effective_master_bpm = master_bpm * master_tempo;
+    double tempo_ratio = effective_master_bpm / slave_bpm;
+    double effective_slave_bpm = slave_bpm * tempo_ratio;
+    
+    if (logFile) {
+        fprintf(logFile, "TEMPO CALC: effective_master=%.1f / slave=%.1f = ratio %.4f\n", 
+                effective_master_bpm, slave_bpm, tempo_ratio);
+        fprintf(logFile, "RESULT: Slave will play at tempo=%.3f (%.1f%% speed), effective_BPM=%.1f\n",
+                tempo_ratio, tempo_ratio * 100, effective_slave_bpm);
+        fflush(logFile);
+    }
+    
     slave->setTempo(tempo_ratio);
     
     // Same tempo - alignNow handles it
@@ -226,8 +240,9 @@ DJ_API void deck_play_synced(int deck_id, int master_deck_id) {
     double slave_first_kick = slave->getBeatOffset();    // e.g., 0.449 sec
     
     // Step 3: Calculate beat intervals
-    double master_spb = 60.0 / master_bpm;  // Seconds per beat in master (real-time)
-    double slave_spb = 60.0 / slave_bpm;    // Seconds per beat in slave (source time)
+    // CRITICAL: Use EFFECTIVE master BPM (accounting for tempo) for real-time calculations
+    double master_spb = 60.0 / effective_master_bpm;  // Seconds per beat in master (REAL-TIME)
+    double slave_spb = 60.0 / slave_bpm;              // Seconds per beat in slave (SOURCE time)
     
     // Step 4: Find where master is in its beat cycle
     // Master's beat grid starts at master_first_kick and repeats every master_spb
@@ -242,40 +257,39 @@ DJ_API void deck_play_synced(int deck_id, int master_deck_id) {
     double time_to_master_kick = master_spb - master_phase;
     
     if (logFile) {
-        fprintf(logFile, "Master: pos=%.3f, first_kick=%.3f, phase=%.3fms, time_to_kick=%.1fms\n",
-                master_pos, master_first_kick, master_phase * 1000, time_to_master_kick * 1000);
+        fprintf(logFile, "Master: pos=%.3f, first_kick=%.3f, tempo=%.3f, eff_bpm=%.1f, phase=%.3fms, time_to_kick=%.1fms\n",
+                master_pos, master_first_kick, master_tempo, effective_master_bpm, master_phase * 1000, time_to_master_kick * 1000);
     }
     
     // Step 5: DJ-STYLE CUE AND START
-    // A DJ cues the incoming track at its first kick (slave_first_kick)
-    // Then presses play when the master hits a kick
-    // 
-    // Since we can't truly "wait", we start the slave NOW at a position
-    // that will bring it to its first kick exactly when master hits its kick
-    //
-    // Slave plays at tempo_ratio speed. In time_to_master_kick real-time seconds,
-    // slave will advance by: time_to_master_kick * tempo_ratio source-seconds
+    // The C# code has already cued the slave to the mix-in point (e.g., 14.86s)
+    // We need to find the nearest beat-aligned position to START from
+    // AND account for where the master currently is in its beat cycle
     
-    double slave_advance = time_to_master_kick * tempo_ratio;
+    double slave_current_pos = slave->getPosition();  // Current cue position from C#
+    // slave_spb already calculated above
     
-    // Start slave at: first_kick - advance
-    // So when it advances, it reaches first_kick exactly when master hits its kick
-    double slave_start_pos = slave_first_kick - slave_advance;
+    // Find which beat number we're closest to
+    double time_since_first_beat = slave_current_pos - slave_first_kick;
+    int beat_number = static_cast<int>(round(time_since_first_beat / slave_spb));
+    if (beat_number < 0) beat_number = 0;
     
-    // If start position is negative (before track start), add one beat period
-    while (slave_start_pos < 0) {
-        slave_start_pos += slave_spb;
-    }
+    // Calculate the exact beat position
+    double slave_beat_pos = slave_first_kick + (beat_number * slave_spb);
+    
+    // KEY FIX: Offset by master's current phase
+    // If master is 200ms into a 476ms beat, slave should also start 200ms into its beat
+    // But we need to convert master's phase (real-time) to slave's source time
+    double master_phase_in_source_time = master_phase / tempo_ratio;  // Convert to slave source time
+    double slave_start_pos = slave_beat_pos + master_phase_in_source_time;
     
     int64_t slave_start_samples = static_cast<int64_t>(slave_start_pos * sample_rate);
     
     if (logFile) {
-        fprintf(logFile, "Slave: first_kick=%.3f, will_advance=%.3f in %.1fms\n",
-                slave_first_kick, slave_advance, time_to_master_kick * 1000);
-        fprintf(logFile, "Starting slave at %.3f sec (sample %lld)\n",
-                slave_start_pos, (long long)slave_start_samples);
-        fprintf(logFile, "When master hits kick at %.1fms, slave will be at its first kick (%.3f sec)\n",
-                time_to_master_kick * 1000, slave_first_kick);
+        fprintf(logFile, "Slave: cued_pos=%.3f, first_kick=%.3f, spb=%.3f\n", 
+                slave_current_pos, slave_first_kick, slave_spb);
+        fprintf(logFile, "Slave: beat_number=%d, beat_pos=%.3f, +master_phase=%.3f => start=%.3f sec\n",
+                beat_number, slave_beat_pos, master_phase_in_source_time, slave_start_pos);
         fclose(logFile);
     }
     
@@ -321,6 +335,11 @@ DJ_API void deck_set_volume(int deck_id, float volume) {
 DJ_API void deck_set_tempo(int deck_id, double tempo) {
     if (!dj::g_engine || deck_id < 0 || deck_id > 1) return;
     dj::g_engine->decks[deck_id]->setTempo(tempo);
+}
+
+DJ_API double deck_get_tempo(int deck_id) {
+    if (!dj::g_engine || deck_id < 0 || deck_id > 1) return 1.0;
+    return dj::g_engine->decks[deck_id]->getTempo();
 }
 
 DJ_API void deck_set_pitch(int deck_id, double semitones) {

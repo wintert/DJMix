@@ -28,8 +28,6 @@ include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/libs/soundtouch/include
     ${CMAKE_CURRENT_SOURCE_DIR}/libs/asiosdk/common
     ${CMAKE_CURRENT_SOURCE_DIR}/libs/minibpm/src
-    ${CMAKE_CURRENT_SOURCE_DIR}/libs/btrack/src
-    ${CMAKE_CURRENT_SOURCE_DIR}/libs/btrack/libs/kiss_fft130
     # QM DSP includes
     ${CMAKE_CURRENT_SOURCE_DIR}/libs/qm-dsp
     ${CMAKE_CURRENT_SOURCE_DIR}/libs/qm-dsp/ext/kissfft
@@ -46,10 +44,8 @@ set(SOURCES
     src/soundtouch_wrap.cpp
     src/bpm_analyzer.cpp
     libs/minibpm/src/MiniBpm.cpp
-    libs/btrack/src/BTrack.cpp
-    libs/btrack/src/OnsetDetectionFunction.cpp
-    # Note: Not including BTrack's kiss_fft - using QM DSP's version instead
-    # QM DSP source files  
+    # NOTE: BTrack removed - conflicts with QM DSP's double-precision kiss_fft
+    # QM DSP source files (same library used by Mixxx)  
     libs/qm-dsp/dsp/tempotracking/TempoTrackV2.cpp
     libs/qm-dsp/dsp/onsets/DetectionFunction.cpp
     libs/qm-dsp/dsp/onsets/PeakPicking.cpp

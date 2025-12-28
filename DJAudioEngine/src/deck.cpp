@@ -13,6 +13,7 @@ Deck::Deck(int sample_rate)
     , soundtouch_(std::make_unique<soundtouch::SoundTouch>())
     , is_playing_(false)
     , sample_position_(0)
+    , output_sample_position_(0)
     , volume_(1.0f)
     , tempo_(1.0)
     , pitch_semitones_(0.0)
@@ -26,6 +27,14 @@ Deck::Deck(int sample_rate)
     soundtouch_->setChannels(2);
     soundtouch_->setTempo(1.0);
     soundtouch_->setPitch(1.0);
+    
+    // DJ-optimized settings for MINIMUM LATENCY
+    // Trade some quality for tighter beat sync
+    soundtouch_->setSetting(SETTING_USE_AA_FILTER, 1);       // Anti-alias filter on
+    soundtouch_->setSetting(SETTING_AA_FILTER_LENGTH, 16);   // Shorter AA filter (was 32)
+    soundtouch_->setSetting(SETTING_SEQUENCE_MS, 20);        // Shorter sequences (was 40)
+    soundtouch_->setSetting(SETTING_SEEKWINDOW_MS, 8);       // Smaller seek window (was 15)
+    soundtouch_->setSetting(SETTING_OVERLAP_MS, 4);          // Less overlap (was 8)
 }
 
 Deck::~Deck() {
@@ -40,6 +49,7 @@ bool Deck::loadTrack(const char* filepath) {
     
     // Reset playback state
     sample_position_ = 0;
+    output_sample_position_ = 0;
     is_playing_ = false;
     
     // Clear SoundTouch buffer
@@ -59,7 +69,20 @@ void Deck::play(int64_t startPosition) {
     if (startPosition >= 0) {
         // Set position and clear buffer BEFORE starting playback
         sample_position_ = startPosition;
+        output_sample_position_ = 0;  // Reset output position for sync
         soundtouch_->clear();
+        
+        // PRE-FEED SoundTouch if tempo != 1.0 to eliminate startup latency
+        // SoundTouch needs samples in its buffer before it can produce output
+        if (std::abs(tempo_ - 1.0) >= 0.001 && audio_file_ && audio_file_->getData()) {
+            const int PREFEED_SAMPLES = 2048;  // Pre-feed enough for immediate output
+            int64_t remaining = audio_file_->getTotalSamples() - sample_position_;
+            if (remaining > PREFEED_SAMPLES) {
+                const float* source = audio_file_->getData() + (sample_position_ * 2);
+                soundtouch_->putSamples(source, PREFEED_SAMPLES);
+                sample_position_ += PREFEED_SAMPLES;
+            }
+        }
     }
     is_playing_ = true;
 }
@@ -71,6 +94,7 @@ void Deck::pause() {
 void Deck::stop() {
     is_playing_ = false;
     sample_position_ = 0;
+    output_sample_position_ = 0;
     soundtouch_->clear();
 }
 
@@ -129,15 +153,17 @@ void Deck::setSamplePosition(int64_t pos, bool forceSync) {
 double Deck::getPhase() const {
     if (bpm_ <= 0.0) return 0.0;
     
-    // Calculate samples per beat
-    double seconds_per_beat = 60.0 / bpm_;
+    // Calculate samples per beat using EFFECTIVE BPM (accounting for tempo)
+    double effective_bpm = bpm_ * tempo_;
+    double seconds_per_beat = 60.0 / effective_bpm;
     int64_t samples_per_beat = static_cast<int64_t>(seconds_per_beat * sample_rate_);
     
     if (samples_per_beat <= 0) return 0.0;
     
-    // Apply beat offset
-    int64_t offset_samples = static_cast<int64_t>(beat_offset_ * sample_rate_);
-    int64_t adjusted_position = sample_position_ - offset_samples;
+    // Use OUTPUT position (real playback time), not source position
+    // Also adjust beat offset for tempo
+    int64_t offset_samples = static_cast<int64_t>((beat_offset_ / tempo_) * sample_rate_);
+    int64_t adjusted_position = output_sample_position_ - offset_samples;
     
     // Calculate phase (0.0 to 1.0)
     int64_t samples_into_beat = adjusted_position % samples_per_beat;
@@ -184,6 +210,7 @@ int Deck::readSamples(float* output, int frames) {
         // Copy directly to output
         memcpy(output, source, to_read * 2 * sizeof(float));
         sample_position_ += to_read;
+        output_sample_position_ += to_read;  // Track output time (same as source when tempo=1.0)
         
         // Apply volume and EQ
         applyEQ(output, to_read);
@@ -213,6 +240,9 @@ int Deck::readSamples(float* output, int frames) {
     
     // Read processed samples from SoundTouch
     int received = soundtouch_->receiveSamples(output, frames);
+    
+    // Track output time - this is the ACTUAL samples sent to speakers
+    output_sample_position_ += received;
     
     // Apply volume and EQ only to received samples
     if (received > 0) {

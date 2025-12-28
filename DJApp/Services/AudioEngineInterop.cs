@@ -62,6 +62,9 @@ namespace DJAutoMixApp.Services
         public static extern void deck_set_tempo(int deckId, double tempo);
 
         [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern double deck_get_tempo(int deckId);
+
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
         public static extern void deck_set_pitch(int deckId, double semitones);
 
         [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]

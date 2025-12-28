@@ -57,6 +57,7 @@ public:
     
     void setVolume(float volume) { volume_ = volume; }
     void setTempo(double tempo);
+    double getTempo() const { return tempo_; }
     void setPitch(double semitones);
     void setBPM(double bpm) { bpm_ = bpm; }
     double getBPM() const { return bpm_; }
@@ -79,6 +80,11 @@ public:
     void setSamplePosition(int64_t pos, bool forceSync = false);
     double getPhase() const;  // 0.0 to 1.0 within beat
     
+    // Output time tracking (real playback position, not source position)
+    int64_t getOutputSamplePosition() const { return output_sample_position_; }
+    double getOutputPosition() const { return static_cast<double>(output_sample_position_) / sample_rate_; }
+    void resetOutputPosition() { output_sample_position_ = 0; }
+    
 private:
     void applyEQ(float* buffer, int frames);
     
@@ -87,7 +93,8 @@ private:
     std::unique_ptr<soundtouch::SoundTouch> soundtouch_;
     
     std::atomic<bool> is_playing_;
-    std::atomic<int64_t> sample_position_;  // In source samples
+    std::atomic<int64_t> sample_position_;          // In source samples (consumed from file)
+    std::atomic<int64_t> output_sample_position_;   // In output samples (real playback time)
     
     float volume_;
     double tempo_;

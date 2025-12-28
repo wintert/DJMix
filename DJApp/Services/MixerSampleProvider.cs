@@ -218,55 +218,112 @@ namespace DJAutoMixApp.Services
         }
 
         /// <summary>
-        /// Simple sync - copy master's position exactly
-        /// Let the continuous correction handle fine-tuning
+        /// Initial sync - align slave's beat phase to master's beat phase
+        /// This positions the slave so its beats align with the master's beats
         /// </summary>
         private void CalculateAndApplyInitialSync(int bufferSize)
         {
             if (syncSlaveDeck == null || syncMasterDeck == null) return;
+            if (syncMasterDeck.BPM <= 0 || syncSlaveDeck.BPM <= 0) return;
 
-            // Just copy master's position - continuous correction will fine-tune
-            double masterPos = syncMasterDeck.CurrentPosition.TotalSeconds;
-            syncSlaveDeck.SetPosition(TimeSpan.FromSeconds(masterPos));
+            // Calculate master's beat position (where in the beat cycle)
+            double masterBeatDuration = 60.0 / (syncMasterDeck.BPM * syncMasterDeck.Tempo);
+            double masterPos = syncMasterDeck.CurrentPosition.TotalSeconds - syncMasterDeck.BeatOffset;
+            double masterPhase = (masterPos % masterBeatDuration) / masterBeatDuration;
+            if (masterPhase < 0) masterPhase += 1.0;
+
+            // Calculate slave's current beat position
+            double slaveBeatDuration = 60.0 / (syncSlaveDeck.BPM * syncSlaveDeck.Tempo);
+            double slavePos = syncSlaveDeck.CurrentPosition.TotalSeconds - syncSlaveDeck.BeatOffset;
+            double slavePhase = (slavePos % slaveBeatDuration) / slaveBeatDuration;
+            if (slavePhase < 0) slavePhase += 1.0;
+
+            // Calculate phase difference and convert to time adjustment
+            double phaseDiff = masterPhase - slavePhase;
+            if (phaseDiff > 0.5) phaseDiff -= 1.0;
+            if (phaseDiff < -0.5) phaseDiff += 1.0;
+            
+            double timeAdjustment = phaseDiff * slaveBeatDuration;
+            
+            // Adjust slave position to match master's phase
+            double newSlavePos = slavePos + syncSlaveDeck.BeatOffset + timeAdjustment;
+            if (newSlavePos < 0) newSlavePos = 0;
+            
+            syncSlaveDeck.SetPosition(TimeSpan.FromSeconds(newSlavePos));
+
+            // Debug log
+            try
+            {
+                System.IO.File.AppendAllText("c:\\Apps\\DJApp\\sync_debug.log",
+                    $"[INIT SYNC] MasterPhase:{masterPhase:F3} SlavePhase:{slavePhase:F3} Adj:{timeAdjustment * 1000:F1}ms NewPos:{newSlavePos:F3}s\n");
+            }
+            catch { }
         }
 
         /// <summary>
-        /// Continuously monitor and correct phase drift using sample offset
-        /// This avoids seeking (which causes glitches) and uses direct sample manipulation
+        /// Continuously monitor and correct phase drift using beat phase comparison
+        /// This works for DIFFERENT songs - compares where each song is within its beat cycle
         /// </summary>
         private void CheckAndCorrectPhase()
         {
             if (syncSlaveDeck == null || syncMasterDeck == null) return;
             if (!syncSlaveDeck.IsPlaying || !syncMasterDeck.IsPlaying) return;
+            if (syncMasterDeck.BPM <= 0 || syncSlaveDeck.BPM <= 0) return;
 
-            // For SAME SONG test: just compare positions directly
-            double masterPos = syncMasterDeck.CurrentPosition.TotalSeconds;
-            double slavePos = syncSlaveDeck.CurrentPosition.TotalSeconds;
-            double diff = masterPos - slavePos; // positive = slave is behind
+            int sampleRate = WaveFormat.SampleRate;
+            int channels = WaveFormat.Channels;
 
-            // If difference > 5ms, apply correction via sample offset
-            if (Math.Abs(diff) > 0.005)
+            // Calculate beat phase for master (0.0 to 1.0 within beat cycle)
+            double masterBeatDuration = 60.0 / (syncMasterDeck.BPM * syncMasterDeck.Tempo);
+            double masterPosInSong = syncMasterDeck.CurrentPosition.TotalSeconds - syncMasterDeck.BeatOffset;
+            double masterPhase = (masterPosInSong % masterBeatDuration) / masterBeatDuration;
+            if (masterPhase < 0) masterPhase += 1.0;
+
+            // Calculate beat phase for slave (0.0 to 1.0 within beat cycle)
+            double slaveBeatDuration = 60.0 / (syncSlaveDeck.BPM * syncSlaveDeck.Tempo);
+            double slavePosInSong = syncSlaveDeck.CurrentPosition.TotalSeconds - syncSlaveDeck.BeatOffset;
+            double slavePhase = (slavePosInSong % slaveBeatDuration) / slaveBeatDuration;
+            if (slavePhase < 0) slavePhase += 1.0;
+
+            // Calculate phase difference (-0.5 to 0.5, wrapping around beat boundary)
+            double phaseDiff = masterPhase - slavePhase;
+            if (phaseDiff > 0.5) phaseDiff -= 1.0;
+            if (phaseDiff < -0.5) phaseDiff += 1.0;
+
+            // Convert phase difference to time
+            // Use slave's beat duration since we're adjusting the slave
+            double timeDiff = phaseDiff * slaveBeatDuration;
+
+            // Only correct if difference > 10ms (avoid constant tiny adjustments)
+            if (Math.Abs(timeDiff) > 0.010)
             {
-                int sampleRate = WaveFormat.SampleRate;
-                int channels = WaveFormat.Channels;
-
                 // Convert time difference to samples
-                // Negative offset = skip samples (slave catches up)
-                // Positive offset = output silence (slave waits)
-                long offsetSamples = (long)(diff * sampleRate * channels);
+                // Positive timeDiff = slave is behind, needs to skip ahead
+                // Negative timeDiff = slave is ahead, needs to delay
+                long offsetSamples = (long)(timeDiff * sampleRate * channels);
 
-                // Apply incrementally to avoid large jumps
-                long maxAdjustment = sampleRate * channels / 10; // max 100ms per callback
-                if (Math.Abs(offsetSamples) > maxAdjustment)
-                {
-                    offsetSamples = offsetSamples > 0 ? maxAdjustment : -maxAdjustment;
-                }
+                // Limit adjustment to avoid audio glitches (max 50ms per cycle)
+                long maxAdjustment = (long)(0.050 * sampleRate * channels);
+                if (offsetSamples > maxAdjustment) offsetSamples = maxAdjustment;
+                if (offsetSamples < -maxAdjustment) offsetSamples = -maxAdjustment;
 
                 syncSlaveDeck.SyncOffsetSamples = offsetSamples;
+
+                // Debug logging (occasionally)
+                if (++phaseCheckCounter >= 100)
+                {
+                    phaseCheckCounter = 0;
+                    try
+                    {
+                        System.IO.File.AppendAllText("c:\\Apps\\DJApp\\sync_debug.log",
+                            $"[PHASE] M:{masterPhase:F3} S:{slavePhase:F3} diff:{phaseDiff:F3} ({timeDiff * 1000:F1}ms) adj:{offsetSamples}\n");
+                    }
+                    catch { }
+                }
             }
             else
             {
-                syncSlaveDeck.SyncOffsetSamples = 0; // Close enough, no correction needed
+                syncSlaveDeck.SyncOffsetSamples = 0; // Close enough
             }
         }
 

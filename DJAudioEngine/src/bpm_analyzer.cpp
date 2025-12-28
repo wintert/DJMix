@@ -44,24 +44,25 @@ double analyzeBPM(const float* samples, int64_t sampleCount, int sampleRate) {
             fflush(logFile);
         }
         
-        // QM DSP detection function parameters
-        const int stepSize = 512;           // Hop size
-        const int frameLength = 1024;       // Frame size
+        // QM DSP detection function parameters - matching Mixxx's approach
+        // Larger frame sizes give more accurate tempo detection
+        const int stepSize = 1024;          // Hop size (Mixxx uses larger hop)
+        const int frameLength = 2048;       // Frame size (larger = more frequency resolution)
         
         if (logFile) {
-            fprintf(logFile, "Creating DFConfig...\n");
+            fprintf(logFile, "Creating DFConfig (Mixxx-style settings)...\n");
             fflush(logFile);
         }
         
-        // Configure detection function (Complex Spectral Difference - best for beats)
+        // Configure detection function - using settings closer to Mixxx
         DFConfig dfConfig;
         dfConfig.stepSize = stepSize;
         dfConfig.frameLength = frameLength;
         dfConfig.DFType = DF_COMPLEXSD;     // Complex spectral difference
         dfConfig.dbRise = 3.0;
-        dfConfig.adaptiveWhitening = false;
-        dfConfig.whiteningRelaxCoeff = -1;
-        dfConfig.whiteningFloor = -1;
+        dfConfig.adaptiveWhitening = true;  // Enable for better detection
+        dfConfig.whiteningRelaxCoeff = 0.9997;  // Mixxx-style whitening
+        dfConfig.whiteningFloor = 0.01;
         
         if (logFile) {
             fprintf(logFile, "Creating DetectionFunction...\n");
@@ -69,6 +70,11 @@ double analyzeBPM(const float* samples, int64_t sampleCount, int sampleRate) {
         }
         
         DetectionFunction df(dfConfig);
+        
+        if (logFile) {
+            fprintf(logFile, "DetectionFunction created successfully!\n");
+            fflush(logFile);
+        }
     
     // Convert stereo to mono and calculate detection function
     std::vector<double> detectionFunction;
@@ -95,6 +101,12 @@ double analyzeBPM(const float* samples, int64_t sampleCount, int sampleRate) {
     for (int64_t f = 0; f < numFrames; f++) {
         int64_t startFrame = f * stepSize;  // Starting frame index (mono)
         
+        // Log first frame processing
+        if (f == 0 && logFile) {
+            fprintf(logFile, "Processing first frame (startFrame=%lld)...\n", (long long)startFrame);
+            fflush(logFile);
+        }
+        
         // Convert stereo to mono for this frame
         for (int i = 0; i < frameLength; i++) {
             int64_t frameIdx = startFrame + i;
@@ -106,9 +118,32 @@ double analyzeBPM(const float* samples, int64_t sampleCount, int sampleRate) {
             }
         }
         
+        // Log before first processTimeDomain call
+        if (f == 0 && logFile) {
+            fprintf(logFile, "Calling df.processTimeDomain for first frame...\n");
+            fflush(logFile);
+        }
+        
         // Calculate detection function value for this frame
         double dfValue = df.processTimeDomain(frame.data());
         detectionFunction.push_back(dfValue);
+        
+        // Log first frame success
+        if (f == 0 && logFile) {
+            fprintf(logFile, "First frame processed successfully, dfValue=%.4f\n", dfValue);
+            fflush(logFile);
+        }
+        
+        // Log progress every 100 frames
+        if (logFile && f > 0 && f % 100 == 0) {
+            fprintf(logFile, "Processed %lld/%lld frames...\n", (long long)f, (long long)numFrames);
+            fflush(logFile);
+        }
+    }
+    
+    if (logFile) {
+        fprintf(logFile, "All %zu frames processed successfully!\n", detectionFunction.size());
+        fflush(logFile);
     }
     
     if (logFile) {
@@ -123,14 +158,37 @@ double analyzeBPM(const float* samples, int64_t sampleCount, int sampleRate) {
         return 0.0;
     }
     
+    if (logFile) {
+        fprintf(logFile, "Creating TempoTrackV2...\n");
+        fflush(logFile);
+    }
+    
     // Use TempoTrackV2 to find tempo
     TempoTrackV2 tempoTracker(static_cast<float>(sampleRate), stepSize);
     
-    std::vector<double> beatPeriod;
+    if (logFile) {
+        fprintf(logFile, "TempoTrackV2 created successfully!\n");
+        fflush(logFile);
+    }
+    
+    // IMPORTANT: beatPeriod must be pre-sized to match detection function size
+    // because viterbi_decode writes to it via indexed access, not push_back
+    std::vector<double> beatPeriod(detectionFunction.size(), 0.0);
     std::vector<double> tempi;
+    
+    if (logFile) {
+        fprintf(logFile, "Calling calculateBeatPeriod...\n");
+        fflush(logFile);
+    }
     
     // Calculate beat period (tempo)
     tempoTracker.calculateBeatPeriod(detectionFunction, beatPeriod, tempi, 120.0, false);
+    
+    if (logFile) {
+        fprintf(logFile, "calculateBeatPeriod completed! beatPeriod.size=%zu, tempi.size=%zu\n", 
+                beatPeriod.size(), tempi.size());
+        fflush(logFile);
+    }
     
     // Calculate median tempo from the tempi array
     double detectedBPM = 0.0;
@@ -156,10 +214,39 @@ double analyzeBPM(const float* samples, int64_t sampleCount, int sampleRate) {
             detectedBPM = tempiSorted[tempiSorted.size() / 2];
         }
     }
+    // Normalize BPM to reasonable DJ range (120-160 for dance music)
+    // First handle extreme cases
+    while (detectedBPM > 0 && detectedBPM < 60) detectedBPM *= 2;
+    while (detectedBPM > 200) detectedBPM /= 2;
     
-    // Normalize BPM to reasonable DJ range (70-160)
-    while (detectedBPM > 0 && detectedBPM < 70) detectedBPM *= 2;
-    while (detectedBPM > 160) detectedBPM /= 2;
+    // Handle common subdivision errors:
+    // - BPM in 85-100 range often means 1.5x is the actual tempo (triplet feel detected)
+    // - BPM in 60-85 range often means 2x is the actual tempo (half-time detected)
+    if (detectedBPM >= 85 && detectedBPM < 100) {
+        // Likely detected 2/3 of actual tempo (e.g., 94 instead of 140)
+        detectedBPM *= 1.5;
+    } else if (detectedBPM >= 60 && detectedBPM < 85) {
+        // Half-time detection
+        detectedBPM *= 2;
+    } else if (detectedBPM > 180) {
+        detectedBPM /= 2;
+    }
+    
+    // AFTER initial corrections, check if result is 4/3 of house tempo
+    // This is a SEPARATE check because the above corrections might push BPM into this range
+    // (e.g., 42.4 -> 84.8 -> 169.6, which is 4/3 of 127)
+    if (detectedBPM > 155 && detectedBPM <= 180) {
+        double corrected = detectedBPM * 0.75;  // Divide by 4/3
+        if (logFile) {
+            fprintf(logFile, "BPM CORRECTION: %.1f in 155-180 range, corrected=%.1f\n", detectedBPM, corrected);
+        }
+        if (corrected >= 117 && corrected <= 140) {  // Expanded range slightly
+            if (logFile) {
+                fprintf(logFile, "BPM CORRECTION: Applying! %.1f -> %.1f\n", detectedBPM, corrected);
+            }
+            detectedBPM = corrected;
+        }
+    }
     
     if (logFile) {
         fprintf(logFile, "BPM ANALYSIS RESULT: %.1f BPM (raw tempi count: %zu)\n", 
@@ -206,18 +293,18 @@ std::vector<double> detectBeats(const float* samples, int64_t sampleCount, int s
     
     if (!samples || sampleCount == 0) return beatTimes;
     
-    const int stepSize = 512;
-    const int frameLength = 1024;
+    const int stepSize = 1024;
+    const int frameLength = 2048;
     
-    // Configure detection function
+    // Configure detection function - matching Mixxx settings
     DFConfig dfConfig;
     dfConfig.stepSize = stepSize;
     dfConfig.frameLength = frameLength;
     dfConfig.DFType = DF_COMPLEXSD;
     dfConfig.dbRise = 3.0;
-    dfConfig.adaptiveWhitening = false;
-    dfConfig.whiteningRelaxCoeff = -1;
-    dfConfig.whiteningFloor = -1;
+    dfConfig.adaptiveWhitening = true;
+    dfConfig.whiteningRelaxCoeff = 0.9997;
+    dfConfig.whiteningFloor = 0.01;
     
     DetectionFunction df(dfConfig);
     
@@ -251,7 +338,8 @@ std::vector<double> detectBeats(const float* samples, int64_t sampleCount, int s
     // Use TempoTrackV2 for beat positions
     TempoTrackV2 tempoTracker(static_cast<float>(sampleRate), stepSize);
     
-    std::vector<double> beatPeriod;
+    // IMPORTANT: beatPeriod must be pre-sized to match detection function size
+    std::vector<double> beatPeriod(detectionFunction.size(), 0.0);
     std::vector<double> tempi;
     std::vector<double> beats;
     

@@ -87,9 +87,10 @@ void SyncManager::update(Deck* decks[2]) {
     
     if (master_bpm <= 0.0 || slave_bpm <= 0.0) return;
     
-    // SIMPLE TEMPO MATCH ONLY - no phase correction
-    // This tests if BPM detection and tempo adjustment work correctly
-    double tempo_ratio = master_bpm / slave_bpm;
+    // Match tempo using EFFECTIVE master BPM (accounting for tempo adjustment)
+    double master_tempo = master->getTempo();
+    double effective_master_bpm = master_bpm * master_tempo;
+    double tempo_ratio = effective_master_bpm / slave_bpm;
     slave->setTempo(tempo_ratio);
     
     // Log occasionally to verify values
@@ -98,8 +99,8 @@ void SyncManager::update(Deck* decks[2]) {
         log_counter = 0;
         FILE* logFile = fopen("c:\\Apps\\DJApp\\cpp_debug.log", "a");
         if (logFile) {
-            fprintf(logFile, "TEMPO MATCH: master=%.1f BPM, slave=%.1f BPM, ratio=%.3f (%.1f%%)\n",
-                    master_bpm, slave_bpm, tempo_ratio, tempo_ratio * 100);
+            fprintf(logFile, "TEMPO MATCH: master=%.1f BPM (eff=%.1f), slave=%.1f BPM, ratio=%.3f (%.1f%%)\n",
+                    master_bpm, effective_master_bpm, slave_bpm, tempo_ratio, tempo_ratio * 100);
             fclose(logFile);
         }
     }
