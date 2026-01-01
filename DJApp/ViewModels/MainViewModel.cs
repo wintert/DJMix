@@ -179,6 +179,19 @@ namespace DJAutoMixApp.ViewModels
                 });
             };
 
+            autoMixEngine.TrackStarted += (s, track) =>
+            {
+                // Update the active deck's info when a new track starts
+                System.Windows.Application.Current.Dispatcher.Invoke(() =>
+                {
+                    // Determine which deck is active based on crossfader
+                    var activeDeck = CrossfaderPosition < 50 ? DeckA : DeckB;
+                    activeDeck.UpdateTrackInfo(track.Title, track.Duration, track.BPM);
+                    ActiveDeckViewModel = activeDeck;
+                    CurrentTrackName = track.Title;
+                });
+            };
+
             ToggleAutoMixCommand = new RelayCommand(
                 _ => IsAutoMixEnabled = !IsAutoMixEnabled,
                 _ => Playlist.Tracks.Count > 0
@@ -186,23 +199,18 @@ namespace DJAutoMixApp.ViewModels
 
             StopAllCommand = new RelayCommand(_ =>
             {
-                // Stop auto-mix
+                // Use the engine's complete reset function
+                autoMixEngine.ResetPlaybackState();
+                
+                // Update UI state
                 IsAutoMixEnabled = false;
                 
-                // Stop both decks
-                deckA.Stop();
-                deckB.Stop();
-                
-                // Reset crossfader to center
-                CrossfaderPosition = 50;
-                
-                // Reset tempo on both decks
-                deckA.Tempo = 1.0;
-                deckB.Tempo = 1.0;
-                
                 // Clear deck displays
-                DeckA.UpdateTrackInfo("", TimeSpan.Zero, 0);
-                DeckB.UpdateTrackInfo("", TimeSpan.Zero, 0);
+                DeckA.Reset();
+                DeckB.Reset();
+                
+                // Reset active deck view to Deck A
+                ActiveDeckViewModel = DeckA;
                 
                 StatusMessage = "Stopped - Ready";
             });

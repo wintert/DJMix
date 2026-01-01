@@ -28,6 +28,7 @@ namespace DJAutoMixApp.Services
         public event EventHandler? MixStarted;
         public event EventHandler? MixCompleted;
         public event EventHandler<double>? TempoRecoveryProgressChanged;
+        public event EventHandler<Models.PlaylistItem>? TrackStarted;
 
         private double crossfaderPosition = 0; // 0 = Deck A, 100 = Deck B
         public double CrossfaderPosition
@@ -97,6 +98,13 @@ namespace DJAutoMixApp.Services
             {
                 activeDeck.Play();
             }
+            
+            // Notify UI of the current track (fixes first track metadata not showing)
+            var currentTrack = playlistManager.CurrentTrack;
+            if (currentTrack != null)
+            {
+                TrackStarted?.Invoke(this, currentTrack);
+            }
 
             StatusChanged?.Invoke(this, "Auto-mix enabled");
         }
@@ -106,6 +114,41 @@ namespace DJAutoMixApp.Services
             mixTimer?.Stop();
             isMixing = false;
             StatusChanged?.Invoke(this, "Auto-mix disabled");
+        }
+
+        /// <summary>
+        /// Complete reset - stops playback and resets playlist to beginning
+        /// </summary>
+        public void ResetPlaybackState()
+        {
+            // Stop auto-mix
+            StopAutoMix();
+            isAutoMixEnabled = false;
+            
+            // Stop tempo recovery
+            tempoRecoveryTimer?.Stop();
+            tempoRecoveryTimer?.Dispose();
+            tempoRecoveryTimer = null;
+            
+            // Stop both decks
+            deckA.Stop();
+            deckB.Stop();
+            
+            // Reset tempos
+            deckA.Tempo = 1.0;
+            deckB.Tempo = 1.0;
+            
+            // Reset playlist to beginning
+            playlistManager.SetCurrentIndex(-1);
+            
+            // Reset deck references
+            activeDeck = deckA;
+            nextDeck = deckB;
+            
+            // Reset crossfader to Deck A side (0 position)
+            CrossfaderPosition = 0;
+            
+            StatusChanged?.Invoke(this, "Stopped - Ready");
         }
 
         private void OnDeckPositionChanged(object? sender, TimeSpan position)

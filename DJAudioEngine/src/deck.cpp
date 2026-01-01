@@ -69,20 +69,7 @@ void Deck::play(int64_t startPosition) {
     if (startPosition >= 0) {
         // Set position and clear buffer BEFORE starting playback
         sample_position_ = startPosition;
-        output_sample_position_ = 0;  // Reset output position for sync
         soundtouch_->clear();
-        
-        // PRE-FEED SoundTouch if tempo != 1.0 to eliminate startup latency
-        // SoundTouch needs samples in its buffer before it can produce output
-        if (std::abs(tempo_ - 1.0) >= 0.001 && audio_file_ && audio_file_->getData()) {
-            const int PREFEED_SAMPLES = 2048;  // Pre-feed enough for immediate output
-            int64_t remaining = audio_file_->getTotalSamples() - sample_position_;
-            if (remaining > PREFEED_SAMPLES) {
-                const float* source = audio_file_->getData() + (sample_position_ * 2);
-                soundtouch_->putSamples(source, PREFEED_SAMPLES);
-                sample_position_ += PREFEED_SAMPLES;
-            }
-        }
     }
     is_playing_ = true;
 }
@@ -94,7 +81,6 @@ void Deck::pause() {
 void Deck::stop() {
     is_playing_ = false;
     sample_position_ = 0;
-    output_sample_position_ = 0;
     soundtouch_->clear();
 }
 

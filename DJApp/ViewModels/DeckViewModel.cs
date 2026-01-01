@@ -66,8 +66,9 @@ namespace DJAutoMixApp.ViewModels
 
         /// <summary>
         /// The actual BPM being played (accounts for tempo adjustment)
+        /// Uses ViewModel's BPM (set via UpdateTrackInfo) multiplied by deck's tempo
         /// </summary>
-        public double EffectiveBPM => deck.EffectiveBPM;
+        public double EffectiveBPM => BPM * deck.Tempo;
 
         // Volume (0-100 for UI, converted to 0-1 for audio)
         private double volume = 70;
@@ -230,6 +231,7 @@ namespace DJAutoMixApp.ViewModels
             Duration = trackDuration;
             BPM = trackBpm;
             OnPropertyChanged(nameof(FormattedDuration));
+            OnPropertyChanged(nameof(EffectiveBPM)); // Notify UI of BPM change
         }
 
         /// <summary>

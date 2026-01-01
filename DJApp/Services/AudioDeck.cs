@@ -171,17 +171,15 @@ namespace DJAutoMixApp.Services
             IsSyncEnabled = true;
 
             // Enable sync in C++ engine (this deck is slave, master deck is master)
+            // This will continuously match tempo during playback
             AudioEngineInterop.sync_enable(deckId, master.deckId);
             
             DJAutoMixApp.App.Log($"EnableSync: slave={deckId}, master={master.deckId}, slaveIsPlaying={IsPlaying}, masterIsPlaying={master.IsPlaying}");
             
-            // Do immediate initial alignment ONLY if slave is not playing (to avoid clicks)
-            // This aligns the stopped deck to the playing master's current phase
-            if (!IsPlaying && master.IsPlaying)
-            {
-                DJAutoMixApp.App.Log("EnableSync: Calling sync_align_now!");
-                AudioEngineInterop.sync_align_now(deckId, master.deckId);
-            }
+            // NOTE: We do NOT call sync_align_now here anymore!
+            // For different songs, the slave should keep its own mix-in position
+            // and only match TEMPO (not position) to the master.
+            // The tempo matching is handled by SyncManager::update() continuously.
         }
 
         public void DisableSync()
