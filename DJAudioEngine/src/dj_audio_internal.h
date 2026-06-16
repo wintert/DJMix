@@ -85,16 +85,41 @@ public:
     double getOutputPosition() const { return static_cast<double>(output_sample_position_) / sample_rate_; }
     void resetOutputPosition() { output_sample_position_ = 0; }
     
+    // Track-ended detection for callback
+    bool trackEnded() const { return track_ended_; }
+    void clearTrackEnded() { track_ended_ = false; }
+    
+    int getId() const { return deck_id_; }
+    void setId(int id) { deck_id_ = id; }
+    
+    struct BiquadFilter {
+        double b0, b1, b2, a1, a2;
+        double lx1, lx2, ly1, ly2;
+        double rx1, rx2, ry1, ry2;
+        
+        BiquadFilter() : b0(1), b1(0), b2(0), a1(0), a2(0),
+                         lx1(0), lx2(0), ly1(0), ly2(0),
+                         rx1(0), rx2(0), ry1(0), ry2(0) {}
+        
+        void reset();
+        void process(float* buffer, int frames);
+        void configureLowShelf(double sampleRate, double gain_linear);
+        void configurePeaking(double sampleRate, double gain_linear);
+        void configureHighShelf(double sampleRate, double gain_linear);
+    };
+
 private:
     void applyEQ(float* buffer, int frames);
     
     int sample_rate_;
+    int deck_id_ = -1;
     std::unique_ptr<AudioFile> audio_file_;
     std::unique_ptr<soundtouch::SoundTouch> soundtouch_;
     
     std::atomic<bool> is_playing_;
     std::atomic<int64_t> sample_position_;          // In source samples (consumed from file)
     std::atomic<int64_t> output_sample_position_;   // In output samples (real playback time)
+    std::atomic<bool> track_ended_;                 // Set when readSamples reaches EOF
     
     float volume_;
     double tempo_;
@@ -105,6 +130,15 @@ private:
     float eq_low_;
     float eq_mid_;
     float eq_high_;
+    
+    // EQ filter state
+    BiquadFilter lowFilter_;
+    BiquadFilter midFilter_;
+    BiquadFilter highFilter_;
+    float last_eq_low_ = -1;
+    float last_eq_mid_ = -1;
+    float last_eq_high_ = -1;
+    bool eq_filters_dirty_ = true;
     
     std::mutex deck_mutex_;
 };
@@ -162,6 +196,10 @@ struct EngineState {
 };
 
 extern EngineState* g_engine;
+
+// File-based BPM analysis (creates internal AudioFile, does not use any deck)
+double analyzeBPMFromFile(const char* filepath);
+double detectFirstBeatFromFile(const char* filepath, double bpm);
 
 } // namespace dj
 

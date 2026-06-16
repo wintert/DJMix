@@ -144,17 +144,27 @@
                         </StackPanel>
                     </Grid>
                     
-                    <!-- Drag & Drop Zone Hint -->
-                    <Border Grid.Column="2" BorderBrush="#333" BorderThickness="2" CornerRadius="8" Width="150" Background="#1A1A1A"
-                             AllowDrop="True"
-                             DragOver="DeckA_DragOver"
-                             Drop="DeckA_Drop">
-                        <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
-                             <TextBlock Text="📥" FontSize="30" HorizontalAlignment="Center" Margin="0,0,0,10"/>
-                             <TextBlock Text="Drop Track Here" FontSize="12" Foreground="#888" TextAlignment="Center"/>
-                             <TextBlock Text="(Deck A/B)" FontSize="10" Foreground="#555" TextAlignment="Center" Margin="0,5,0,0"/>
-                        </StackPanel>
-                    </Border>
+                    <!-- Drag & Drop Zone Hints -->
+                    <WrapPanel Grid.Column="2" VerticalAlignment="Center">
+                        <Border BorderBrush="#333" BorderThickness="2" CornerRadius="8" Width="130" Background="#1A1A1A"
+                                 AllowDrop="True" Margin="0,0,10,0"
+                                 DragOver="DeckA_DragOver"
+                                 Drop="DeckA_Drop">
+                            <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                                 <TextBlock Text="📥 DECK A" FontSize="16" HorizontalAlignment="Center" Margin="0,5,0,5" FontWeight="Bold" Foreground="{StaticResource PurpleAccentBrush}"/>
+                                 <TextBlock Text="Drop track here" FontSize="10" Foreground="#888" TextAlignment="Center" Margin="0,0,0,5"/>
+                            </StackPanel>
+                        </Border>
+                        <Border BorderBrush="#333" BorderThickness="2" CornerRadius="8" Width="130" Background="#1A1A1A"
+                                 AllowDrop="True"
+                                 DragOver="DeckB_DragOver"
+                                 Drop="DeckB_Drop">
+                            <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                                 <TextBlock Text="📥 DECK B" FontSize="16" HorizontalAlignment="Center" Margin="0,5,0,5" FontWeight="Bold" Foreground="{StaticResource BlueAccentBrush}"/>
+                                 <TextBlock Text="Drop track here" FontSize="10" Foreground="#888" TextAlignment="Center" Margin="0,0,0,5"/>
+                            </StackPanel>
+                        </Border>
+                    </WrapPanel>
                 </Grid>
             </Border>
 

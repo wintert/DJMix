@@ -33,15 +33,15 @@ static int audioCallback(
         framesPerBuffer
     );
     
-    // Throttle position callbacks (update every ~10 callbacks = ~100ms at 512 samples)
-    engine->callback_counter++;
-    if (engine->callback_counter >= 10) {
-        engine->callback_counter = 0;
-        
-        if (engine->position_callback) {
-            auto callback = reinterpret_cast<position_callback_t>(engine->position_callback);
-            callback(0, engine->decks[0]->getPosition());
-            callback(1, engine->decks[1]->getPosition());
+    // Track-ended detection - fire callback for any deck that reached EOF
+    // Check both decks after mixing
+    for (int i = 0; i < 2; i++) {
+        if (engine->decks[i]->trackEnded()) {
+            engine->decks[i]->clearTrackEnded();
+            if (engine->track_ended_callback) {
+                auto callback = reinterpret_cast<track_ended_callback_t>(engine->track_ended_callback);
+                callback(i);
+            }
         }
     }
     
@@ -75,7 +75,9 @@ DJ_API int engine_init(int sample_rate, int buffer_size) {
     
     // Create decks
     dj::g_engine->decks[0] = std::make_unique<dj::Deck>(sample_rate);
+    dj::g_engine->decks[0]->setId(0);
     dj::g_engine->decks[1] = std::make_unique<dj::Deck>(sample_rate);
+    dj::g_engine->decks[1]->setId(1);
     
     // Create mixer and sync manager
     dj::g_engine->mixer = std::make_unique<dj::Mixer>();
@@ -180,120 +182,9 @@ DJ_API void deck_play(int deck_id) {
     dj::g_engine->decks[deck_id]->play();
 }
 
-DJ_API void deck_play_synced(int deck_id, int master_deck_id) {
-    if (!dj::g_engine || deck_id < 0 || deck_id > 1 || master_deck_id < 0 || master_deck_id > 1) return;
-    
-    FILE* logFile = fopen("c:\\Apps\\DJApp\\cpp_debug.log", "a");
-    
-    dj::Deck* master = dj::g_engine->decks[master_deck_id].get();
-    dj::Deck* slave = dj::g_engine->decks[deck_id].get();
-    
-    double master_bpm = master->getBPM();
-    double slave_bpm = slave->getBPM();
-    
-    if (logFile) {
-        fprintf(logFile, "=== DJ-STYLE SYNC ===\n");
-        fprintf(logFile, "MASTER (deck %d): BPM=%.1f, tempo=%.3f, effective_BPM=%.1f\n", 
-                master_deck_id, master_bpm, master->getTempo(), master_bpm * master->getTempo());
-        fprintf(logFile, "SLAVE  (deck %d): BPM=%.1f (next song)\n", deck_id, slave_bpm);
-    }
-    
-    if (master_bpm <= 0 || slave_bpm <= 0) {
-        if (logFile) {
-            fprintf(logFile, "No BPM, just playing\n");
-            fclose(logFile);
-        }
-        slave->play();
-        return;
-    }
-    
-    // Step 1: Match tempo
-    double master_tempo = master->getTempo();
-    double effective_master_bpm = master_bpm * master_tempo;
-    double tempo_ratio = effective_master_bpm / slave_bpm;
-    double effective_slave_bpm = slave_bpm * tempo_ratio;
-    
-    if (logFile) {
-        fprintf(logFile, "TEMPO CALC: effective_master=%.1f / slave=%.1f = ratio %.4f\n", 
-                effective_master_bpm, slave_bpm, tempo_ratio);
-        fprintf(logFile, "RESULT: Slave will play at tempo=%.3f (%.1f%% speed), effective_BPM=%.1f\n",
-                tempo_ratio, tempo_ratio * 100, effective_slave_bpm);
-        fflush(logFile);
-    }
-    
-    slave->setTempo(tempo_ratio);
-    
-    // Same tempo - alignNow handles it
-    if (std::abs(tempo_ratio - 1.0) < 0.01) {
-        if (logFile) {
-            fprintf(logFile, "Same tempo, using alignNow\n");
-            fclose(logFile);
-        }
-        slave->play();
-        return;
-    }
-    
-    int sample_rate = 44100;
-    
-    // Step 2: Get beat offsets - the ACTUAL position of the first kick in each track
-    double master_first_kick = master->getBeatOffset();  // e.g., 0.058 sec
-    double slave_first_kick = slave->getBeatOffset();    // e.g., 0.449 sec
-    
-    // Step 3: Calculate beat intervals
-    // CRITICAL: Use EFFECTIVE master BPM (accounting for tempo) for real-time calculations
-    double master_spb = 60.0 / effective_master_bpm;  // Seconds per beat in master (REAL-TIME)
-    double slave_spb = 60.0 / slave_bpm;              // Seconds per beat in slave (SOURCE time)
-    
-    // Step 4: Find where master is in its beat cycle
-    // Master's beat grid starts at master_first_kick and repeats every master_spb
-    double master_pos = master->getPosition();
-    double master_time_since_first_kick = master_pos - master_first_kick;
-    
-    // How far into the current beat cycle? (phase)
-    double master_phase = fmod(master_time_since_first_kick, master_spb);
-    if (master_phase < 0) master_phase += master_spb;
-    
-    // Time until master's next kick
-    double time_to_master_kick = master_spb - master_phase;
-    
-    if (logFile) {
-        fprintf(logFile, "Master: pos=%.3f, first_kick=%.3f, tempo=%.3f, eff_bpm=%.1f, phase=%.3fms, time_to_kick=%.1fms\n",
-                master_pos, master_first_kick, master_tempo, effective_master_bpm, master_phase * 1000, time_to_master_kick * 1000);
-    }
-    
-    // Step 5: DJ-STYLE CUE AND START
-    // The C# code has already cued the slave to the mix-in point (e.g., 14.86s)
-    // We need to find the nearest beat-aligned position to START from
-    // AND account for where the master currently is in its beat cycle
-    
-    double slave_current_pos = slave->getPosition();  // Current cue position from C#
-    // slave_spb already calculated above
-    
-    // Find which beat number we're closest to
-    double time_since_first_beat = slave_current_pos - slave_first_kick;
-    int beat_number = static_cast<int>(round(time_since_first_beat / slave_spb));
-    if (beat_number < 0) beat_number = 0;
-    
-    // Calculate the exact beat position
-    double slave_beat_pos = slave_first_kick + (beat_number * slave_spb);
-    
-    // KEY FIX: Offset by master's current phase
-    // If master is 200ms into a 476ms beat, slave should also start 200ms into its beat
-    // But we need to convert master's phase (real-time) to slave's source time
-    double master_phase_in_source_time = master_phase / tempo_ratio;  // Convert to slave source time
-    double slave_start_pos = slave_beat_pos + master_phase_in_source_time;
-    
-    int64_t slave_start_samples = static_cast<int64_t>(slave_start_pos * sample_rate);
-    
-    if (logFile) {
-        fprintf(logFile, "Slave: cued_pos=%.3f, first_kick=%.3f, spb=%.3f\n", 
-                slave_current_pos, slave_first_kick, slave_spb);
-        fprintf(logFile, "Slave: beat_number=%d, beat_pos=%.3f, +master_phase=%.3f => start=%.3f sec\n",
-                beat_number, slave_beat_pos, master_phase_in_source_time, slave_start_pos);
-        fclose(logFile);
-    }
-    
-    slave->play(slave_start_samples);
+DJ_API double deck_get_beat_offset(int deck_id) {
+    if (!dj::g_engine || deck_id < 0 || deck_id > 1) return 0.0;
+    return dj::g_engine->decks[deck_id]->getBeatOffset();
 }
 
 DJ_API void deck_pause(int deck_id) {

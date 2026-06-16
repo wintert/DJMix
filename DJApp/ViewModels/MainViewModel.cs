@@ -30,6 +30,14 @@ namespace DJAutoMixApp.ViewModels
             }
         }
 
+        // Set crossfader without re-entering through ViewModel property (used by auto-mix events)
+        public void SetCrossfaderInternal(double position)
+        {
+            position = Math.Clamp(position, 0, 100);
+            SetProperty(ref crossfaderPosition, position);
+            AudioEngineInterop.mixer_set_crossfader((float)(position / 100.0));
+        }
+
         private bool isAutoMixEnabled;
         public bool IsAutoMixEnabled
         {
@@ -123,10 +131,10 @@ namespace DJAutoMixApp.ViewModels
             // Subscribe to auto-mix events
             autoMixEngine.CrossfaderPositionChanged += (s, pos) =>
             {
-                CrossfaderPosition = pos;
+                // Use internal setter to avoid re-entering autoMixEngine.CrossfaderPosition
+                SetCrossfaderInternal(pos);
                 
                 // Switch active deck view based on crossfader dominance
-                // Seamlessly switch when passing 50%
                 if (pos < 50 && ActiveDeckViewModel != DeckA)
                 {
                     ActiveDeckViewModel = DeckA;

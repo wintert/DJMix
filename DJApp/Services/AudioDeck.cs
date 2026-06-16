@@ -7,7 +7,7 @@ namespace DJAutoMixApp.Services
     /// Controller for a single deck - wraps C++ audio engine
     /// Provides high-level C# API for UI
     /// </summary>
-    public class AudioDeck
+    public class AudioDeck : IDisposable
     {
         private System.Timers.Timer? positionTimer;
         private readonly int deckId;
@@ -34,7 +34,7 @@ namespace DJAutoMixApp.Services
 
         public double BeatOffset
         {
-            get; 
+            get => AudioEngineInterop.deck_get_beat_offset(deckId);
             set => AudioEngineInterop.deck_set_beat_offset(deckId, value);
         }
 
@@ -195,16 +195,10 @@ namespace DJAutoMixApp.Services
             
             if (IsTrackLoaded)
             {
-                // If sync is enabled, use deck_play_synced which atomically sets position and starts playback
-                if (IsSyncEnabled && masterDeckRef != null && masterDeckRef.IsPlaying)
-                {
-                    DJAutoMixApp.App.Log($"Play: Using deck_play_synced to start at master position");
-                    AudioEngineInterop.deck_play_synced(deckId, masterDeckRef.deckId);
-                }
-                else
-                {
-                    AudioEngineInterop.deck_play(deckId);
-                }
+                // Always use regular deck_play - the position has already been set correctly 
+                // (either via SetPosition for phase-aligned start, or default 0)
+                // deck_play_synced would override our carefully calculated phase-aligned position!
+                AudioEngineInterop.deck_play(deckId);
                 
                 positionTimer?.Start();
                 PlaybackStarted?.Invoke(this, EventArgs.Empty);
@@ -247,6 +241,18 @@ namespace DJAutoMixApp.Services
             {
                 SetPosition(newPos);
             }
+        }
+
+        public void NotifyTrackEnded()
+        {
+            TrackEnded?.Invoke(this, EventArgs.Empty);
+        }
+
+        public void Dispose()
+        {
+            positionTimer?.Stop();
+            positionTimer?.Dispose();
+            positionTimer = null;
         }
     }
 }

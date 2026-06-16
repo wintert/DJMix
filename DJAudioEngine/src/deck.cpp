@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
-#include <map>
 
 namespace dj {
 
@@ -14,6 +13,7 @@ Deck::Deck(int sample_rate)
     , is_playing_(false)
     , sample_position_(0)
     , output_sample_position_(0)
+    , track_ended_(false)
     , volume_(1.0f)
     , tempo_(1.0)
     , pitch_semitones_(0.0)
@@ -169,24 +169,13 @@ int Deck::readSamples(float* output, int frames) {
     
     std::lock_guard<std::mutex> lock(deck_mutex_);
     
-    // Log tempo check - use this pointer address as deck identifier
-    // Log every ~second (at 44100 sample rate, 512 frame buffer = ~86 calls/sec)
-    static std::map<void*, int> log_counters;
-    if (log_counters[this]++ % 100 == 0) {
-        FILE* logFile = fopen("c:\\Apps\\DJApp\\cpp_debug.log", "a");
-        if (logFile) {
-            fprintf(logFile, "readSamples[%p]: tempo_=%.3f, bypass=%s, playing=%d\n", 
-                    (void*)this, tempo_, (std::abs(tempo_ - 1.0) < 0.001) ? "YES" : "NO", is_playing_.load());
-            fclose(logFile);
-        }
-    }
-    
     // Bypass SoundTouch when tempo is 1.0 - read directly from audio file
     // This eliminates SoundTouch's internal latency for perfect sync
     if (std::abs(tempo_ - 1.0) < 0.001 && std::abs(pitch_semitones_) < 0.1) {
         int64_t remaining = audio_file_->getTotalSamples() - sample_position_;
         if (remaining <= 0) {
             is_playing_ = false;
+            track_ended_ = true;
             return frames;
         }
         
@@ -214,6 +203,7 @@ int Deck::readSamples(float* output, int frames) {
         if (remaining <= 0) {
             // End of track
             is_playing_ = false;
+            track_ended_ = true;
             break;
         }
         
@@ -243,21 +233,98 @@ int Deck::readSamples(float* output, int frames) {
     return frames;
 }
 
-void Deck::applyEQ(float* buffer, int frames) {
-    // Simple 3-band EQ using biquad filters
-    // For now, just apply gain to approximate frequency bands
-    // TODO: Implement proper biquad filters
-    
-    // This is a simplified version - in production you'd want proper filters
-    for (int i = 0; i < frames * 2; i += 2) {
-        float left = buffer[i];
-        float right = buffer[i + 1];
+// Biquad filter implementations for 3-band EQ
+void Deck::BiquadFilter::reset() {
+    lx1 = lx2 = ly1 = ly2 = 0;
+    rx1 = rx2 = ry1 = ry2 = 0;
+}
+
+void Deck::BiquadFilter::process(float* buffer, int frames) {
+    for (int i = 0; i < frames; i++) {
+        float left_in = buffer[i * 2];
+        float left_out = static_cast<float>(b0 * left_in + b1 * lx1 + b2 * lx2 - a1 * ly1 - a2 * ly2);
+        lx2 = lx1; lx1 = left_in;
+        ly2 = ly1; ly1 = left_out;
+        buffer[i * 2] = left_out;
         
-        // Apply EQ gains (simplified - not frequency-specific yet)
-        float avg_gain = (eq_low_ + eq_mid_ + eq_high_) / 3.0f;
-        buffer[i] = left * avg_gain;
-        buffer[i + 1] = right * avg_gain;
+        float right_in = buffer[i * 2 + 1];
+        float right_out = static_cast<float>(b0 * right_in + b1 * rx1 + b2 * rx2 - a1 * ry1 - a2 * ry2);
+        rx2 = rx1; rx1 = right_in;
+        ry2 = ry1; ry1 = right_out;
+        buffer[i * 2 + 1] = right_out;
     }
+}
+
+void Deck::BiquadFilter::configureLowShelf(double sampleRate, double gain_linear) {
+    double gain_db = (gain_linear > 0.001f) ? 20.0 * log10(gain_linear) : -60.0;
+    double A = pow(10.0, gain_db / 40.0);
+    double w0 = 2.0 * M_PI * 250.0 / sampleRate;
+    double alpha = sin(w0) / (2.0 * 0.707);
+    double cos_w0 = cos(w0);
+    
+    double norm = (A + 1.0) + (A - 1.0) * cos_w0 + 2.0 * sqrt(A) * alpha;
+    b0 = A * ((A + 1.0) - (A - 1.0) * cos_w0 + 2.0 * sqrt(A) * alpha) / norm;
+    b1 = 2.0 * A * ((A - 1.0) - (A + 1.0) * cos_w0) / norm;
+    b2 = A * ((A + 1.0) - (A - 1.0) * cos_w0 - 2.0 * sqrt(A) * alpha) / norm;
+    a1 = -2.0 * ((A + 1.0) + (A - 1.0) * cos_w0) / norm;
+    a2 = ((A + 1.0) + (A - 1.0) * cos_w0 - 2.0 * sqrt(A) * alpha) / norm;
+}
+
+void Deck::BiquadFilter::configurePeaking(double sampleRate, double gain_linear) {
+    double gain_db = (gain_linear > 0.001f) ? 20.0 * log10(gain_linear) : -60.0;
+    double A = pow(10.0, gain_db / 40.0);
+    double w0 = 2.0 * M_PI * 1000.0 / sampleRate;
+    double alpha = sin(w0) / (2.0 * 0.707);
+    double cos_w0 = cos(w0);
+    
+    double norm = 1.0 + alpha / A;
+    b0 = (1.0 + alpha * A) / norm;
+    b1 = (-2.0 * cos_w0) / norm;
+    b2 = (1.0 - alpha * A) / norm;
+    a1 = (-2.0 * cos_w0) / norm;
+    a2 = (1.0 + alpha / A) / norm;
+}
+
+void Deck::BiquadFilter::configureHighShelf(double sampleRate, double gain_linear) {
+    double gain_db = (gain_linear > 0.001f) ? 20.0 * log10(gain_linear) : -60.0;
+    double A = pow(10.0, gain_db / 40.0);
+    double w0 = 2.0 * M_PI * 2500.0 / sampleRate;
+    double alpha = sin(w0) / (2.0 * 0.707);
+    double cos_w0 = cos(w0);
+    
+    double norm = (A + 1.0) - (A - 1.0) * cos_w0 + 2.0 * sqrt(A) * alpha;
+    b0 = A * ((A + 1.0) + (A - 1.0) * cos_w0 + 2.0 * sqrt(A) * alpha) / norm;
+    b1 = -2.0 * A * ((A - 1.0) + (A + 1.0) * cos_w0) / norm;
+    b2 = A * ((A + 1.0) + (A - 1.0) * cos_w0 - 2.0 * sqrt(A) * alpha) / norm;
+    a1 = 2.0 * ((A - 1.0) - (A + 1.0) * cos_w0) / norm;
+    a2 = ((A + 1.0) + (A - 1.0) * cos_w0 - 2.0 * sqrt(A) * alpha) / norm;
+}
+
+void Deck::applyEQ(float* buffer, int frames) {
+    // Reset filter state on first call or after track load
+    if (eq_filters_dirty_) {
+        lowFilter_ = BiquadFilter();
+        midFilter_ = BiquadFilter();
+        highFilter_ = BiquadFilter();
+        eq_filters_dirty_ = false;
+    }
+    
+    if (last_eq_low_ != eq_low_) {
+        lowFilter_.configureLowShelf(sample_rate_, eq_low_);
+        last_eq_low_ = eq_low_;
+    }
+    if (last_eq_mid_ != eq_mid_) {
+        midFilter_.configurePeaking(sample_rate_, eq_mid_);
+        last_eq_mid_ = eq_mid_;
+    }
+    if (last_eq_high_ != eq_high_) {
+        highFilter_.configureHighShelf(sample_rate_, eq_high_);
+        last_eq_high_ = eq_high_;
+    }
+    
+    lowFilter_.process(buffer, frames);
+    midFilter_.process(buffer, frames);
+    highFilter_.process(buffer, frames);
 }
 
 } // namespace dj

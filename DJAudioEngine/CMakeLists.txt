@@ -41,7 +41,6 @@ set(SOURCES
     src/deck.cpp
     src/mixer.cpp
     src/sync.cpp
-    src/soundtouch_wrap.cpp
     src/bpm_analyzer.cpp
     libs/minibpm/src/MiniBpm.cpp
     # NOTE: BTrack removed - conflicts with QM DSP's double-precision kiss_fft

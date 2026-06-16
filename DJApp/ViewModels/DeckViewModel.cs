@@ -265,17 +265,16 @@ namespace DJAutoMixApp.ViewModels
         {
             try
             {
-                // Let's use BeatDetector here properly.
-                var beatDetector = new Services.BeatDetector();
-                var trackInfo = beatDetector.AnalyzeTrack(filePath); // This is slow-ish, potentially block UI? 
-                // Should run analysis async too.
-
-                await Task.Run(() => 
+                // Run analysis and deck loading on background thread
+                var trackInfo = await Task.Run(() => 
                 {
-                    deck.LoadTrack(filePath, trackInfo.BPM, trackInfo.FirstBeatOffset); 
+                    var detector = new Services.BeatDetector();
+                    var info = detector.AnalyzeTrack(filePath);
+                    deck.LoadTrack(filePath, info.BPM, info.FirstBeatOffset);
+                    return info;
                 });
                 
-                // Update properties
+                // Update properties on UI thread
                 TrackName = System.IO.Path.GetFileNameWithoutExtension(filePath);
                 Duration = deck.Duration;
                 BPM = trackInfo.BPM;

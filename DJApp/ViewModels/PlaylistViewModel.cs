@@ -5,13 +5,11 @@ using System;
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 using System.Windows;
 
 namespace DJAutoMixApp.ViewModels
 {
-    /// <summary>
-    /// ViewModel for playlist panel
-    /// </summary>
     public class PlaylistViewModel : ViewModelBase
     {
         private readonly PlaylistManager playlistManager;
@@ -33,6 +31,13 @@ namespace DJAutoMixApp.ViewModels
             set => SetProperty(ref currentTrackIndex, value);
         }
 
+        private bool isAnalyzing;
+        public bool IsAnalyzing
+        {
+            get => isAnalyzing;
+            set => SetProperty(ref isAnalyzing, value);
+        }
+
         public RelayCommand AddTracksCommand { get; }
         public RelayCommand RemoveTrackCommand { get; }
         public RelayCommand ClearPlaylistCommand { get; }
@@ -44,59 +49,40 @@ namespace DJAutoMixApp.ViewModels
         {
             this.playlistManager = playlistManager;
             this.beatDetector = beatDetector;
-            
+
             Tracks = new ObservableCollection<PlaylistItem>();
 
-            // Subscribe to events
             playlistManager.PlaylistChanged += OnPlaylistChanged;
             playlistManager.TrackChanged += OnTrackChanged;
 
-            // Commands
             AddTracksCommand = new RelayCommand(_ => AddTracks());
             RemoveTrackCommand = new RelayCommand(_ => RemoveTrack(), _ => SelectedTrack != null);
             ClearPlaylistCommand = new RelayCommand(_ => ClearPlaylist(), _ => Tracks.Count > 0);
             SavePlaylistCommand = new RelayCommand(_ => SavePlaylist(), _ => Tracks.Count > 0);
             LoadPlaylistCommand = new RelayCommand(_ => LoadPlaylist());
-            ReAnalyzeBPMCommand = new RelayCommand(_ => ReAnalyzeBPM(), _ => SelectedTrack != null);
+            ReAnalyzeBPMCommand = new RelayCommand(_ => _ = ReAnalyzeBPMAsync(), _ => SelectedTrack != null);
         }
 
         private void OnPlaylistChanged(object? sender, EventArgs e)
         {
             Tracks.Clear();
             foreach (var track in playlistManager.Playlist)
-            {
                 Tracks.Add(track);
-            }
         }
 
-        /// <summary>
-        /// Handles files dropped onto the playlist
-        /// </summary>
-        public void HandleFileDrop(string[] filePaths)
+        public async void HandleFileDrop(string[] filePaths)
         {
             foreach (var filePath in filePaths)
             {
-                // Check if it's an audio file
-                var ext = System.IO.Path.GetExtension(filePath).ToLowerInvariant();
-                if (ext == ".mp3" || ext == ".wav" || ext == ".m4a" || ext == ".ogg" || ext == ".flac")
-                {
-                    var item = new PlaylistItem(filePath);
-                    
-                    try
-                    {
-                        var trackInfo = beatDetector.AnalyzeTrack(filePath);
-                        item.BPM = trackInfo.BPM;
-                        item.Duration = trackInfo.Duration;
-                        item.MixOutPoint = beatDetector.CalculateMixOutPoint(item.BPM, item.Duration, 16);
-                        item.MixInPoint = beatDetector.CalculateMixInPoint(item.BPM, 8);
-                    }
-                    catch
-                    {
-                        item.BPM = 120;
-                    }
+                var ext = Path.GetExtension(filePath).ToLowerInvariant();
+                if (ext != ".mp3" && ext != ".wav" && ext != ".m4a" && ext != ".ogg" && ext != ".flac")
+                    continue;
 
-                    playlistManager.AddTrack(item);
-                }
+                var item = new PlaylistItem(filePath);
+
+                // Add immediately (without BPM), then analyze in background
+                playlistManager.AddTrack(item);
+                await AnalyzeAndUpdateItem(item);
             }
         }
 
@@ -105,7 +91,7 @@ namespace DJAutoMixApp.ViewModels
             CurrentTrackIndex = playlistManager.CurrentIndex;
         }
 
-        private void AddTracks()
+        private async void AddTracks()
         {
             var dialog = new OpenFileDialog
             {
@@ -119,33 +105,44 @@ namespace DJAutoMixApp.ViewModels
                 foreach (var filePath in dialog.FileNames)
                 {
                     var item = new PlaylistItem(filePath);
-                    
-                    // Analyze in background (simplified - in production, use async/await)
-                    try
-                    {
-                        var trackInfo = beatDetector.AnalyzeTrack(filePath);
-                        item.BPM = trackInfo.BPM;
-                        item.Duration = trackInfo.Duration;
-                        item.MixOutPoint = beatDetector.CalculateMixOutPoint(item.BPM, item.Duration, 16);
-                        item.MixInPoint = beatDetector.CalculateMixInPoint(item.BPM, 8);
-                    }
-                    catch
-                    {
-                        // Use defaults if analysis fails
-                        item.BPM = 120;
-                    }
-
                     playlistManager.AddTrack(item);
+                    await AnalyzeAndUpdateItem(item);
                 }
+            }
+        }
+
+        private async Task AnalyzeAndUpdateItem(PlaylistItem item)
+        {
+            IsAnalyzing = true;
+            try
+            {
+                var trackInfo = await Task.Run(() => beatDetector.AnalyzeTrack(item.FilePath));
+
+                // UI will auto-update because PlaylistItem now implements INotifyPropertyChanged
+                item.BPM = trackInfo.BPM;
+                item.BeatOffset = trackInfo.FirstBeatOffset;
+                item.Duration = trackInfo.Duration;
+
+                if (trackInfo.BPM > 0)
+                {
+                    item.MixOutPoint = beatDetector.CalculateMixOutPoint(trackInfo.BPM, trackInfo.Duration, 16);
+                    item.MixInPoint = beatDetector.CalculateMixInPoint(trackInfo.BPM, 8);
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error analyzing track: {ex.Message}");
+            }
+            finally
+            {
+                IsAnalyzing = false;
             }
         }
 
         private void RemoveTrack()
         {
             if (SelectedTrack != null)
-            {
                 playlistManager.RemoveTrack(SelectedTrack);
-            }
         }
 
         private void ClearPlaylist()
@@ -157,9 +154,7 @@ namespace DJAutoMixApp.ViewModels
                 MessageBoxImage.Question);
 
             if (result == MessageBoxResult.Yes)
-            {
                 playlistManager.Clear();
-            }
         }
 
         private void SavePlaylist()
@@ -207,62 +202,42 @@ namespace DJAutoMixApp.ViewModels
             }
         }
 
-        /// <summary>
-        /// Re-analyze the selected track's BPM using the C++ audio engine (BTrack)
-        /// </summary>
-        private void ReAnalyzeBPM()
+        private async Task ReAnalyzeBPMAsync()
         {
             if (SelectedTrack == null) return;
 
+            var track = SelectedTrack;
+            IsAnalyzing = true;
+
             try
             {
-                // Load track into a temporary deck for analysis
-                int tempDeckId = 0; // Use deck A for analysis
-                int result = AudioEngineInterop.deck_load_track(tempDeckId, SelectedTrack.FilePath);
-                
-                if (result == 0)
+                double newBpm = await Task.Run(() => AudioEngineInterop.audio_analyze_bpm_from_file(track.FilePath));
+
+                if (newBpm > 0)
                 {
-                    // Analyze using C++ BTrack
-                    double newBpm = AudioEngineInterop.audio_analyze_bpm(tempDeckId);
-                    
-                    if (newBpm > 0)
-                    {
-                        double oldBpm = SelectedTrack.BPM;
-                        SelectedTrack.BPM = newBpm;
-                        
-                        // Re-calculate beat offset
-                        double beatOffset = AudioEngineInterop.audio_analyze_beat_offset(tempDeckId, newBpm);
-                        SelectedTrack.BeatOffset = beatOffset;
-                        
-                        // Re-calculate mix points
-                        SelectedTrack.MixOutPoint = beatDetector.CalculateMixOutPoint(newBpm, SelectedTrack.Duration, 16);
-                        SelectedTrack.MixInPoint = beatDetector.CalculateMixInPoint(newBpm, 8);
-                        
-                        // Force UI update
-                        var index = Tracks.IndexOf(SelectedTrack);
-                        if (index >= 0)
-                        {
-                            Tracks[index] = SelectedTrack;
-                        }
-                        
-                        MessageBox.Show($"BPM re-analyzed: {oldBpm:F1} → {newBpm:F1}", "BPM Analysis", MessageBoxButton.OK, MessageBoxImage.Information);
-                    }
-                    else
-                    {
-                        MessageBox.Show("BPM analysis failed - could not detect tempo.", "Error", MessageBoxButton.OK, MessageBoxImage.Warning);
-                    }
-                    
-                    // Unload temp deck
-                    AudioEngineInterop.deck_unload_track(tempDeckId);
+                    double oldBpm = track.BPM;
+                    double offset = await Task.Run(() => AudioEngineInterop.audio_analyze_beat_offset_from_file(track.FilePath, newBpm));
+
+                    // UI auto-updates via INotifyPropertyChanged
+                    track.BPM = newBpm;
+                    track.BeatOffset = offset;
+                    track.MixOutPoint = beatDetector.CalculateMixOutPoint(newBpm, track.Duration, 16);
+                    track.MixInPoint = beatDetector.CalculateMixInPoint(newBpm, 8);
+
+                    MessageBox.Show($"BPM re-analyzed: {oldBpm:F1} → {newBpm:F1}", "BPM Analysis", MessageBoxButton.OK, MessageBoxImage.Information);
                 }
                 else
                 {
-                    MessageBox.Show("Failed to load track for analysis.", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                    MessageBox.Show("BPM analysis failed - could not detect tempo.", "Error", MessageBoxButton.OK, MessageBoxImage.Warning);
                 }
             }
             catch (Exception ex)
             {
                 MessageBox.Show($"Error analyzing BPM: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+            finally
+            {
+                IsAnalyzing = false;
             }
         }
     }

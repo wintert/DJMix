@@ -21,7 +21,6 @@ DJ_API void engine_stop();
 DJ_API int deck_load_track(int deck_id, const char* file_path);
 DJ_API void deck_unload_track(int deck_id);
 DJ_API void deck_play(int deck_id);
-DJ_API void deck_play_synced(int deck_id, int master_deck_id);  // Atomically align and play
 DJ_API void deck_pause(int deck_id);
 DJ_API void deck_stop(int deck_id);
 DJ_API void deck_set_position(int deck_id, double position_seconds);
@@ -51,9 +50,16 @@ DJ_API void sync_enable(int slave_deck_id, int master_deck_id);
 DJ_API void sync_disable(int deck_id);
 DJ_API void sync_align_now(int slave_deck_id, int master_deck_id);  // Immediate one-time alignment
 
-// BPM Analysis (using MiniBPM library)
+// Deck parameter getters
+DJ_API double deck_get_beat_offset(int deck_id);        // Get current beat offset
+
+// BPM Analysis - using deck's loaded track
 DJ_API double audio_analyze_bpm(int deck_id);           // Analyze loaded track for BPM
 DJ_API double audio_analyze_beat_offset(int deck_id, double bpm);  // Find first beat position
+
+// BPM Analysis - from file path (does not require a deck, safe to use while decks are playing)
+DJ_API double audio_analyze_bpm_from_file(const char* filepath);          // Analyze file for BPM
+DJ_API double audio_analyze_beat_offset_from_file(const char* filepath, double bpm);  // Find first beat from file
 
 // Callbacks (for UI updates)
 typedef void (*position_callback_t)(int deck_id, double position);

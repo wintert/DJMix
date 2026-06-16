@@ -5,17 +5,8 @@ using System.Linq;
 
 namespace DJAutoMixApp.Services
 {
-    /// <summary>
-    /// Beat detection service that analyzes audio files to detect BPM and beat positions
-    /// Uses Hybrid approach: Low-Pass Filter -> Adaptive Peak Detection -> Interval Histogram
-    /// </summary>
     public class BeatDetector
     {
-        private const int SAMPLE_RATE = 44100;
-        
-        /// <summary>
-        /// Analyzes an audio file and detects its BPM using C++ QM DSP engine
-        /// </summary>
         public Models.TrackInfo AnalyzeTrack(string filePath)
         {
             var trackInfo = new Models.TrackInfo
@@ -25,105 +16,284 @@ namespace DJAutoMixApp.Services
 
             try
             {
-                // Get duration using NAudio (fast, doesn't require full load)
                 using (var reader = new AudioFileReader(filePath))
                 {
                     trackInfo.Duration = reader.TotalTime;
                 }
-                
-                // Use C++ QM DSP engine for BPM analysis (same as Mixxx)
-                int tempDeckId = 0; // Use deck 0 for analysis
-                int result = AudioEngineInterop.deck_load_track(tempDeckId, filePath);
-                
-                if (result == 0)
+
+                double bpm = AudioEngineInterop.audio_analyze_bpm_from_file(filePath);
+                double offset = 0;
+
+                if (bpm > 0)
                 {
-                    // Analyze using C++ QM DSP
-                    double bpm = AudioEngineInterop.audio_analyze_bpm(tempDeckId);
-                    double offset = 0;
-                    
-                    if (bpm > 0)
-                    {
-                        offset = AudioEngineInterop.audio_analyze_beat_offset(tempDeckId, bpm);
-                        trackInfo.BPM = bpm;
-                        trackInfo.BPMConfidence = 0.95; // QM DSP is highly accurate
-                    }
-                    else
-                    {
-                        // Fallback to C# analysis if C++ fails
-                        using (var reader = new AudioFileReader(filePath))
-                        {
-                            var analysisLength = Math.Min(60, (int)reader.TotalTime.TotalSeconds);
-                            var (fallbackBpm, fallbackOffset) = DetectBPM(reader, analysisLength);
-                            bpm = fallbackBpm;
-                            offset = fallbackOffset;
-                        }
-                        trackInfo.BPM = bpm;
-                        trackInfo.BPMConfidence = 0.75;
-                    }
-                    
-                    trackInfo.FirstBeatOffset = offset;
-                    trackInfo.BeatPositions = GenerateBeatGrid(trackInfo.BPM, trackInfo.Duration.TotalSeconds, offset);
-                    
-                    // Unload the temp deck
-                    AudioEngineInterop.deck_unload_track(tempDeckId);
+                    offset = AudioEngineInterop.audio_analyze_beat_offset_from_file(filePath, bpm);
+                    trackInfo.BPM = bpm;
+                    trackInfo.BPMConfidence = 0.95;
                 }
                 else
                 {
-                    // C++ load failed, use fallback C# analysis
                     using (var reader = new AudioFileReader(filePath))
                     {
                         var analysisLength = Math.Min(60, (int)reader.TotalTime.TotalSeconds);
-                        var (bpm, offset) = DetectBPM(reader, analysisLength);
-                        trackInfo.BPM = bpm;
-                        trackInfo.FirstBeatOffset = offset;
-                        trackInfo.BPMConfidence = 0.75;
-                        trackInfo.BeatPositions = GenerateBeatGrid(bpm, reader.TotalTime.TotalSeconds, offset);
+                        var result = DetectBPM(reader, analysisLength);
+                        bpm = result.bpm;
+                        offset = result.offset;
                     }
+                    trackInfo.BPM = bpm;
+                    trackInfo.BPMConfidence = bpm > 0 ? 0.75 : 0.0;
                 }
+
+                trackInfo.FirstBeatOffset = offset;
+                trackInfo.BeatPositions = GenerateBeatGrid(trackInfo.BPM, trackInfo.Duration.TotalSeconds, offset);
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"Beat detection error: {ex.Message}");
-                trackInfo.BPM = 120; // Default BPM
+                trackInfo.BPM = 0;
                 trackInfo.BPMConfidence = 0.0;
             }
 
             return trackInfo;
         }
 
-        /// <summary>
-        /// Detects BPM and First Beat Offset
-        /// </summary>
         private (double bpm, double offset) DetectBPM(AudioFileReader reader, int analysisLengthSeconds)
         {
-            // 1. Read Audio
+            int fileSampleRate = reader.WaveFormat.SampleRate;
+            int channels = reader.WaveFormat.Channels;
+
             int secondsToRead = Math.Min(analysisLengthSeconds, (int)reader.TotalTime.TotalSeconds);
-            var samplesToRead = SAMPLE_RATE * secondsToRead * reader.WaveFormat.Channels;
-            var buffer = new float[samplesToRead];
-            var samplesRead = reader.Read(buffer, 0, samplesToRead);
+            int samplesPerChannel = secondsToRead * fileSampleRate;
+            int totalSamplesToRead = samplesPerChannel * channels;
+            var buffer = new float[totalSamplesToRead];
+            int samplesRead = reader.Read(buffer, 0, totalSamplesToRead);
+            int framesRead = samplesRead / channels;
 
-            // 2. Convert to Mono
-            var monoSamples = ConvertToMono(buffer, samplesRead, reader.WaveFormat.Channels);
+            var mono = ConvertToMono(buffer, samplesRead, channels);
 
-            // 3. Low-Pass Filter (150Hz) - Isolate Kicks
-            // Helps significantly with preventing high-hats from confusing the detector
-            ApplyLowPassFilter(monoSamples, 150, SAMPLE_RATE);
+            // Downsample to ~1kHz for efficient autocorrelation
+            int downsampleFactor = Math.Max(1, fileSampleRate / 1000);
+            int downsampledLength = mono.Length / downsampleFactor;
+            var downsampled = new float[downsampledLength];
+            for (int i = 0; i < downsampledLength; i++)
+            {
+                float sum = 0;
+                int start = i * downsampleFactor;
+                for (int j = 0; j < downsampleFactor && (start + j) < mono.Length; j++)
+                    sum += Math.Abs(mono[start + j]);
+                downsampled[i] = sum / downsampleFactor;
+            }
 
-            // 4. Calculate Energy Envelope
-            var energyEnvelope = CalculateEnergyEnvelope(monoSamples);
+            // Normalize
+            float maxVal = 1e-10f;
+            for (int i = 0; i < downsampled.Length; i++)
+                if (downsampled[i] > maxVal) maxVal = downsampled[i];
+            if (maxVal > 1e-10f)
+                for (int i = 0; i < downsampled.Length; i++)
+                    downsampled[i] /= maxVal;
 
-            // 5. Adaptive Peak Detection
-            var peaks = DetectPeaksAdaptive(energyEnvelope);
+            // Compute onset envelope: half-wave rectified difference
+            var onset = new float[downsampled.Length - 1];
+            for (int i = 0; i < onset.Length; i++)
+            {
+                float diff = downsampled[i + 1] - downsampled[i];
+                onset[i] = diff > 0 ? diff : 0;
+            }
 
-            // 6. Interval Histogram BPM
-            var bpm = CalculateBPMFromIntervals(peaks);
+            // Compute autocorrelation of onset envelope
+            int maxLag = onset.Length / 2;
+            int minLag = (int)((60.0 / 180.0) * (fileSampleRate / (double)downsampleFactor)); // 180 BPM
+            int maxSearchLag = (int)((60.0 / 60.0) * (fileSampleRate / (double)downsampleFactor)); // 60 BPM
+            minLag = Math.Max(2, minLag);
+            maxSearchLag = Math.Min(maxLag, maxSearchLag);
 
-            // 7. Calculate offset using phase-aligned first beat detection
-            // Instead of just taking first peak, find the beat position that best aligns
-            // with the detected BPM grid
-            double offset = CalculateFirstBeatOffset(peaks, bpm);
+            if (minLag >= maxSearchLag)
+                return (0, 0);
 
-            return (bpm, offset);
+            double bestBpm = 0;
+            double bestScore = 0;
+            float[] onsetMeanRemoved = new float[onset.Length];
+            float mean = 0;
+            for (int i = 0; i < onset.Length; i++) mean += onset[i];
+            mean /= onset.Length;
+            for (int i = 0; i < onset.Length; i++) onsetMeanRemoved[i] = onset[i] - mean;
+
+            for (int lag = minLag; lag < maxSearchLag; lag++)
+            {
+                double corr = 0;
+                double norm1 = 0, norm2 = 0;
+                for (int i = 0; i < onset.Length - lag; i++)
+                {
+                    corr += onsetMeanRemoved[i] * onsetMeanRemoved[i + lag];
+                    norm1 += onsetMeanRemoved[i] * onsetMeanRemoved[i];
+                    norm2 += onsetMeanRemoved[i + lag] * onsetMeanRemoved[i + lag];
+                }
+                if (norm1 > 0 && norm2 > 0)
+                {
+                    double normalized = corr / Math.Sqrt(norm1 * norm2);
+                    if (normalized > bestScore)
+                    {
+                        bestScore = normalized;
+                        bestBpm = 60.0 / (lag * downsampleFactor / (double)fileSampleRate);
+                    }
+                }
+            }
+
+            // Check half/double BPM
+            if (bestBpm > 0)
+            {
+                while (bestBpm < 70) bestBpm *= 2;
+                while (bestBpm > 180) bestBpm /= 2;
+
+                // Refine: check if double or half gives stronger alignment
+                double doubled = bestBpm * 2;
+                double halved = bestBpm / 2;
+                if (doubled <= 180)
+                {
+                    double score = CheckBpmAlignment(onset, bestBpm, downsampleFactor, fileSampleRate);
+                    double score2 = CheckBpmAlignment(onset, doubled, downsampleFactor, fileSampleRate);
+                    if (score2 > score * 1.15 && score2 > 0.01)
+                        bestBpm = doubled;
+                }
+                if (halved >= 70)
+                {
+                    double score = CheckBpmAlignment(onset, bestBpm, downsampleFactor, fileSampleRate);
+                    double scoreH = CheckBpmAlignment(onset, halved, downsampleFactor, fileSampleRate);
+                    if (scoreH > score * 1.15 && scoreH > 0.01)
+                        bestBpm = halved;
+                }
+            }
+
+            // Try interval-based method as secondary verification
+            if (bestBpm > 0)
+            {
+                var peaks = DetectPeaksSimple(onset, 0.15f);
+                if (peaks.Count >= 4)
+                {
+                    double intervalBpm = CalculateBPMFromPeakIntervals(peaks, downsampleFactor, fileSampleRate);
+                    if (intervalBpm > 0)
+                    {
+                        double diff = Math.Abs(bestBpm - intervalBpm);
+                        if (diff > 5)
+                        {
+                            if (CheckBpmAlignment(onset, intervalBpm, downsampleFactor, fileSampleRate) >
+                                CheckBpmAlignment(onset, bestBpm, downsampleFactor, fileSampleRate))
+                                bestBpm = intervalBpm;
+                        }
+                    }
+                    double offset = CalculateFirstBeatOffset(peaks, bestBpm, downsampleFactor, fileSampleRate);
+                    return (Math.Round(bestBpm, 1), offset);
+                }
+            }
+
+            return (Math.Round(bestBpm, 1), 0);
+        }
+
+        private double CheckBpmAlignment(float[] onset, double bpm, int downsampleFactor, int sampleRate)
+        {
+            double beatPeriod = 60.0 / bpm;
+            double beatSamples = beatPeriod * (sampleRate / (double)downsampleFactor);
+            if (beatSamples <= 0) return 0;
+
+            double score = 0;
+            int count = 0;
+            for (double pos = beatSamples; pos < onset.Length; pos += beatSamples)
+            {
+                int idx = (int)Math.Round(pos);
+                if (idx >= 0 && idx < onset.Length)
+                {
+                    score += onset[idx];
+                    count++;
+                }
+            }
+            return count > 0 ? score / count : 0;
+        }
+
+        private List<int> DetectPeaksSimple(float[] onset, float threshold)
+        {
+            var peaks = new List<int>();
+            float mean = 0;
+            for (int i = 0; i < onset.Length; i++) mean += onset[i];
+            mean /= onset.Length;
+            float dynamicThreshold = mean + (onset.Max() - mean) * 0.2f;
+            if (dynamicThreshold < threshold) dynamicThreshold = threshold;
+
+            int minDistance = Math.Max(2, onset.Length / 500);
+            for (int i = 2; i < onset.Length - 2; i++)
+            {
+                if (onset[i] > dynamicThreshold &&
+                    onset[i] >= onset[i - 1] && onset[i] >= onset[i + 1] &&
+                    onset[i] >= onset[i - 2] && onset[i] >= onset[i + 2])
+                {
+                    if (peaks.Count == 0 || (i - peaks[peaks.Count - 1]) >= minDistance)
+                        peaks.Add(i);
+                }
+            }
+            return peaks;
+        }
+
+        private double CalculateBPMFromPeakIntervals(List<int> peaks, int downsampleFactor, int sampleRate)
+        {
+            if (peaks.Count < 4) return 0;
+
+            var intervals = new List<double>();
+            for (int i = 1; i < peaks.Count; i++)
+                intervals.Add(peaks[i] - peaks[i - 1]);
+
+            var bpmCandidates = new List<(double bpm, int weight)>();
+
+            // Weighted histogram of intervals
+            var grouped = intervals
+                .GroupBy(x => (int)Math.Round(x / 2.0) * 2)
+                .OrderByDescending(g => g.Count())
+                .Take(5)
+                .ToList();
+
+            foreach (var group in grouped)
+            {
+                double avgInterval = group.Average();
+                double intervalSec = avgInterval * downsampleFactor / (double)sampleRate;
+                double bpm = 60.0 / intervalSec;
+
+                while (bpm < 70) bpm *= 2;
+                while (bpm > 180) bpm /= 2;
+
+                bpmCandidates.Add((bpm, group.Count()));
+            }
+
+            if (bpmCandidates.Count == 0) return 0;
+
+            // Score each candidate by how well it aligns with all peaks
+            double bestScore2 = 0;
+            double bestCand = 0;
+            foreach (var cand in bpmCandidates)
+            {
+                double period = 60.0 / cand.bpm;
+                double periodSamples = period * sampleRate / downsampleFactor;
+                if (periodSamples <= 0) continue;
+
+                double score = 0;
+                int matchCount = 0;
+                for (int i = 1; i < peaks.Count; i++)
+                {
+                    double dist = peaks[i] - peaks[0];
+                    double beats = dist / periodSamples;
+                    double error = Math.Abs(beats - Math.Round(beats));
+                    if (error < 0.2)
+                    {
+                        score += 1.0 - error;
+                        matchCount++;
+                    }
+                }
+
+                double weighted = matchCount > 0 ? (score / matchCount) * cand.weight : 0;
+                if (weighted > bestScore2)
+                {
+                    bestScore2 = weighted;
+                    bestCand = cand.bpm;
+                }
+            }
+
+            return bestCand > 0 ? bestCand : bpmCandidates[0].bpm;
         }
 
         private float[] ConvertToMono(float[] buffer, int samplesRead, int channels)
@@ -134,125 +304,55 @@ namespace DJAutoMixApp.Services
             var monoSamples = new float[samplesRead / channels];
             for (int i = 0; i < monoSamples.Length; i++)
             {
-                monoSamples[i] = (buffer[i * channels] + buffer[i * channels + 1]) / 2f;
+                float sum = 0;
+                for (int ch = 0; ch < channels; ch++)
+                    sum += buffer[i * channels + ch];
+                monoSamples[i] = sum / channels;
             }
             return monoSamples;
         }
 
-        private void ApplyLowPassFilter(float[] samples, float cutoff, int sampleRate)
-        {
-            float alpha = 2 * MathF.PI * cutoff / sampleRate; // Simple One-Pole
-            float lastVal = 0;
-            for (int i = 0; i < samples.Length; i++)
-            {
-                lastVal += alpha * (samples[i] - lastVal);
-                samples[i] = lastVal;
-            }
-        }
-
-        private List<double> CalculateEnergyEnvelope(float[] samples)
-        {
-            var energyEnvelope = new List<double>();
-            int windowSize = 1024; 
-            int hopSize = 512;
-
-            for (int i = 0; i < samples.Length - windowSize; i += hopSize)
-            {
-                double energy = 0;
-                for (int j = 0; j < windowSize; j++)
-                {
-                    float s = samples[i + j];
-                    energy += s * s;
-                }
-                energyEnvelope.Add(Math.Sqrt(energy / windowSize));
-            }
-
-            return energyEnvelope;
-        }
-
-        private List<int> DetectPeaksAdaptive(List<double> envelope)
-        {
-            var peaks = new List<int>();
-            int window = 43; // ~0.5s window at 86Hz (44100/512)
-            
-            for (int i = window; i < envelope.Count - window; i++)
-            {
-                // Calculate local average around i
-                double localSum = 0;
-                for (int j = i - window; j <= i + window; j++)
-                {
-                    localSum += envelope[j];
-                }
-                double localAvg = localSum / (2 * window + 1);
-                double threshold = localAvg * 1.3; // 1.3x local average
-
-                if (envelope[i] > threshold &&
-                    envelope[i] > envelope[i - 1] &&
-                    envelope[i] > envelope[i + 1]) // Local Maxima
-                {
-                    peaks.Add(i);
-                }
-            }
-
-            return peaks;
-        }
-
-        /// <summary>
-        /// Calculate the first beat offset by finding the phase that best aligns with detected peaks
-        /// </summary>
-        private double CalculateFirstBeatOffset(List<int> peaks, double bpm)
+        private double CalculateFirstBeatOffset(List<int> peaks, double bpm, int downsampleFactor, int sampleRate)
         {
             if (peaks.Count < 4 || bpm <= 0) return 0;
 
-            // Convert BPM to beat interval in peak indices (hop size = 512)
-            double beatIntervalSamples = (60.0 / bpm) * SAMPLE_RATE;
-            double beatIntervalPeaks = beatIntervalSamples / 512.0;
+            double beatSamples = (60.0 / bpm) * (sampleRate / (double)downsampleFactor);
+            if (beatSamples <= 0) return 0;
 
-            // Only consider peaks in the first 10 seconds as candidates for first beat
-            int maxFirstBeatIndex = (int)((10.0 * SAMPLE_RATE) / 512.0);
-            var earlyCandidates = peaks.Where(p => p < maxFirstBeatIndex).Take(20).ToList();
-
-            if (earlyCandidates.Count == 0) return 0;
-
+            // Try each early peak as candidate for first beat
+            var earlyPeaks = peaks.Take(Math.Min(15, peaks.Count)).ToList();
             double bestOffset = 0;
-            double bestScore = double.MaxValue;
+            double bestError = double.MaxValue;
 
-            // For each early peak, calculate how well the beat grid aligns with all peaks
-            foreach (var candidate in earlyCandidates)
+            foreach (var candidate in earlyPeaks)
             {
-                double candidateTime = (candidate * 512.0) / SAMPLE_RATE;
+                double candidateTime = candidate * downsampleFactor / (double)sampleRate;
                 double totalError = 0;
                 int matchCount = 0;
 
-                // Check alignment with subsequent peaks (first 30 seconds worth)
-                foreach (var peak in peaks.Take(100))
+                foreach (var peak in peaks.Take(50))
                 {
-                    double peakTime = (peak * 512.0) / SAMPLE_RATE;
+                    double peakTime = peak * downsampleFactor / (double)sampleRate;
                     double timeSinceCandidate = peakTime - candidateTime;
-
                     if (timeSinceCandidate < 0) continue;
 
-                    // Calculate distance to nearest beat grid line
-                    double beatDuration = 60.0 / bpm;
-                    double beatsElapsed = timeSinceCandidate / beatDuration;
+                    double beatsElapsed = timeSinceCandidate / (60.0 / bpm);
                     double fractionalBeat = beatsElapsed - Math.Round(beatsElapsed);
-                    double error = Math.Abs(fractionalBeat) * beatDuration; // Error in seconds
+                    double error = Math.Abs(fractionalBeat);
 
-                    // Only count peaks that are reasonably close to a beat
-                    if (error < beatDuration * 0.25)
+                    if (error < 0.2)
                     {
                         totalError += error;
                         matchCount++;
                     }
                 }
 
-                // Score: lower is better (more matches with less total error)
-                if (matchCount > 0)
+                if (matchCount > 3)
                 {
                     double score = totalError / matchCount - (matchCount * 0.001);
-                    if (score < bestScore)
+                    if (score < bestError)
                     {
-                        bestScore = score;
+                        bestError = score;
                         bestOffset = candidateTime;
                     }
                 }
@@ -261,76 +361,30 @@ namespace DJAutoMixApp.Services
             return bestOffset;
         }
 
-        private double CalculateBPMFromIntervals(List<int> peaks)
-        {
-            if (peaks.Count < 2) return 120;
-
-            var intervals = new List<int>();
-            for (int i = 1; i < peaks.Count; i++)
-            {
-                intervals.Add(peaks[i] - peaks[i - 1]);
-            }
-
-            // Group intervals (with tolerance of +/- 2)
-            // Bin size 5 makes sense for 86Hz sampling (5 samples = ~60ms)
-            var groups = intervals
-                .GroupBy(x => (int)Math.Round(x / 3.0) * 3) 
-                .OrderByDescending(g => g.Count())
-                .Take(3) // Check top 3 candidates
-                .ToList();
-
-            if (!groups.Any()) return 120;
-
-            // Pick the best group that fits our range bias (70-140)
-            double bestBpm = 120;
-            int maxEvidence = -1;
-
-            foreach (var group in groups)
-            {
-                double avgInterval = group.Average();
-                double intervalSec = (avgInterval * 512.0) / SAMPLE_RATE;
-                double bpm = 60.0 / intervalSec;
-
-                // Normalize BPM
-                while (bpm < 70) bpm *= 2;
-                while (bpm > 140) bpm /= 2;
-
-                // Weight score by count
-                // If we folded (doubled/halved), we essentially map to this BPM
-                // Simple logic: Take the First one (highest count)
-                if (maxEvidence == -1)
-                {
-                    bestBpm = bpm;
-                    maxEvidence = group.Count();
-                }
-            }
-
-            return Math.Round(bestBpm, 3); // 3 decimal precision for tight sync
-        }
-
         private List<double> GenerateBeatGrid(double bpm, double durationSeconds, double offset = 0)
         {
             var beatGrid = new List<double>();
-            var beatInterval = 60.0 / bpm; 
+            if (bpm <= 0) return beatGrid;
+            var beatInterval = 60.0 / bpm;
 
             for (double time = offset; time < durationSeconds; time += beatInterval)
-            {
                 beatGrid.Add(time);
-            }
 
             return beatGrid;
         }
 
         public TimeSpan CalculateMixOutPoint(double bpm, TimeSpan duration, int barsBeforeEnd = 16)
         {
+            if (bpm <= 0) return TimeSpan.Zero;
             var beatDuration = 60.0 / bpm;
-            var barDuration = beatDuration * 4; 
+            var barDuration = beatDuration * 4;
             var mixOutTime = duration.TotalSeconds - (barDuration * barsBeforeEnd);
             return TimeSpan.FromSeconds(Math.Max(0, mixOutTime));
         }
 
         public TimeSpan CalculateMixInPoint(double bpm, int barsFromStart = 8)
         {
+            if (bpm <= 0) return TimeSpan.Zero;
             var beatDuration = 60.0 / bpm;
             var barDuration = beatDuration * 4;
             return TimeSpan.FromSeconds(barDuration * barsFromStart);

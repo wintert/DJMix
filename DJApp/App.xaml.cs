@@ -7,9 +7,21 @@ namespace DJAutoMixApp
 {
     public partial class App : Application
     {
+        // Keep delegate alive to prevent GC collection while C++ engine holds the function pointer
+        private static AudioEngineInterop.TrackEndedCallback? _trackEndedHandler;
+
         public static void Log(string message)
         {
-            File.AppendAllText(@"c:\Apps\DJApp\debug.log", $"{DateTime.Now:HH:mm:ss} {message}\n");
+            try
+            {
+                var logDir = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "logs");
+                System.IO.Directory.CreateDirectory(logDir);
+                File.AppendAllText(System.IO.Path.Combine(logDir, "debug.log"), $"{DateTime.Now:HH:mm:ss} {message}\n");
+            }
+            catch
+            {
+                // Silently fail if logging is unavailable
+            }
         }
         
         protected override void OnStartup(StartupEventArgs e)
@@ -43,6 +55,17 @@ namespace DJAutoMixApp
             // Create audio deck controllers (using C++ engine)
             var deckA = new AudioDeck(0); // Deck ID 0
             var deckB = new AudioDeck(1); // Deck ID 1
+
+            // Register C++ track-ended callback (keep delegate alive via static field)
+            _trackEndedHandler = deckId =>
+            {
+                System.Windows.Application.Current.Dispatcher.BeginInvoke(() =>
+                {
+                    if (deckId == 0) deckA.NotifyTrackEnded();
+                    else deckB.NotifyTrackEnded();
+                });
+            };
+            AudioEngineInterop.set_track_ended_callback(_trackEndedHandler);
 
             // Create other services
             var playlistManager = new PlaylistManager();

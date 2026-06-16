@@ -34,9 +34,6 @@ namespace DJAutoMixApp.Services
         public static extern void deck_play(int deckId);
 
         [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
-        public static extern void deck_play_synced(int deckId, int masterDeckId);
-
-        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
         public static extern void deck_pause(int deckId);
 
         [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
@@ -76,6 +73,9 @@ namespace DJAutoMixApp.Services
         [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
         public static extern void deck_set_beat_offset(int deckId, double offsetSeconds);
 
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+        public static extern double deck_get_beat_offset(int deckId);
+
         // EQ
         [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
         public static extern void deck_set_eq_low(int deckId, float gain);
@@ -113,11 +113,18 @@ namespace DJAutoMixApp.Services
         [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
         public static extern void set_track_ended_callback(TrackEndedCallback callback);
 
-        // BPM Analysis (using MiniBPM library)
+        // BPM Analysis - using deck's loaded track
         [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
         public static extern double audio_analyze_bpm(int deckId);
 
         [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
         public static extern double audio_analyze_beat_offset(int deckId, double bpm);
+
+        // BPM Analysis - from file path (safe to use while decks are playing)
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
+        public static extern double audio_analyze_bpm_from_file([MarshalAs(UnmanagedType.LPStr)] string filePath);
+
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
+        public static extern double audio_analyze_beat_offset_from_file([MarshalAs(UnmanagedType.LPStr)] string filePath, double bpm);
     }
 }

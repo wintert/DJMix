@@ -21,6 +21,7 @@ namespace DJAutoMixApp.Services
         private AudioDeck? nextDeck;
         private bool isMixing = false;
         private bool isAutoMixEnabled = false;
+        private bool disposed = false;
         private int mixDurationSeconds = 10; // Duration of crossfade in seconds
         
         public event EventHandler<double>? CrossfaderPositionChanged;
@@ -37,8 +38,9 @@ namespace DJAutoMixApp.Services
             set
             {
                 crossfaderPosition = Math.Clamp(value, 0, 100);
-                UpdateDeckVolumes();
                 CrossfaderPositionChanged?.Invoke(this, crossfaderPosition);
+                // Note: Actual C++ mixer_set_crossfader is called by MainViewModel
+                // in response to CrossfaderPositionChanged to avoid double-setting.
             }
         }
 
@@ -160,7 +162,7 @@ namespace DJAutoMixApp.Services
 
             // Check if we should start mixing
             var timeRemaining = deck.Duration - position;
-            var mixStartTime = TimeSpan.FromSeconds(mixDurationSeconds + 2); // Start 2 seconds before actual mix
+            var mixStartTime = TimeSpan.FromSeconds(mixDurationSeconds + 5); // Start 5s buffer before crossfade
 
             if (timeRemaining <= mixStartTime && playlistManager.HasNext)
             {
@@ -182,144 +184,155 @@ namespace DJAutoMixApp.Services
                 return;
             }
             
-            // If we weren't mixing, just move to next track
+            // If we weren't mixing, advance playlist and play next track
             if (!isMixing)
             {
-                SwitchDecks();
-                LoadNextTrackOnActiveDeck();
-                activeDeck?.Play();
+                if (playlistManager.HasNext)
+                {
+                    playlistManager.MoveNext();
+                    LoadNextTrackOnActiveDeck();
+                    activeDeck?.Play();
+                    TrackStarted?.Invoke(this, playlistManager.CurrentTrack!);
+                }
             }
         }
 
+        private readonly object mixLock = new object();
+
         private void StartMixTransition()
         {
-            // Guard against multiple calls - set flag immediately
-            if (isMixing) 
+            lock (mixLock)
             {
-                DJAutoMixApp.App.Log("StartMix: Already mixing, skipping");
-                return;
+                if (disposed) return;
+                if (isMixing)
+                {
+                    DJAutoMixApp.App.Log("StartMix: Already mixing, skipping");
+                    return;
+                }
+                isMixing = true;
             }
-            isMixing = true;  // Set IMMEDIATELY to prevent race conditions
 
             // Load next track onto the inactive deck
             if (!LoadNextTrackOnNextDeck())
             {
                 StatusChanged?.Invoke(this, "No more tracks in playlist");
-                isMixing = false;  // Reset if no tracks
+                lock (mixLock) { isMixing = false; }
                 return;
             }
 
             MixStarted?.Invoke(this, EventArgs.Empty);
             StatusChanged?.Invoke(this, "Mixing tracks...");
 
-            // Calculate mix start point for next track (8 bars in)
             var nextTrackItem = playlistManager.NextTrack;
             var currentTrack = playlistManager.CurrentTrack;
-            
-            DJAutoMixApp.App.Log($"StartMix: nextTrack={nextTrackItem?.Title}, BPM={nextTrackItem?.BPM}, currentTrack={currentTrack?.Title}, BPM={currentTrack?.BPM}");
-            DJAutoMixApp.App.Log($"StartMix: nextDeck={nextDeck?.GetHashCode()}, activeDeck={activeDeck?.GetHashCode()}");
 
             try
             {
-            if (nextTrackItem != null && nextTrackItem.BPM > 0 && nextDeck != null && activeDeck != null)
-            {
-                // First seek to mix-in point
-                var mixInPoint = beatDetector.CalculateMixInPoint(nextTrackItem.BPM, 8);
-                nextDeck.SetPosition(mixInPoint);
-                DJAutoMixApp.App.Log($"StartMix: Set nextDeck position to {mixInPoint.TotalSeconds:F2}s");
-
-                // Enable sync to active deck - this will match BPM
-                if (currentTrack != null && currentTrack.BPM > 0)
+                if (nextTrackItem != null && nextTrackItem.BPM > 0 && nextDeck != null && activeDeck != null)
                 {
-                    DJAutoMixApp.App.Log($"StartMix: Enabling sync on nextDeck to activeDeck");
-                    nextDeck.EnableSync(activeDeck);
-                    DJAutoMixApp.App.Log($"StartMix: After EnableSync, IsSyncEnabled={nextDeck.IsSyncEnabled}");
-                    StatusChanged?.Invoke(this, $"Beat-syncing: {nextTrackItem.BPM:F1} → {currentTrack.BPM:F1} BPM");
-                }
-                else
-                {
-                    DJAutoMixApp.App.Log($"StartMix: SKIPPED sync - currentTrack null or BPM=0");
-                }
-            }
-            else
-            {
-                DJAutoMixApp.App.Log($"StartMix: SKIPPED sync setup - conditions not met");
-            }
+                    var mixInPoint = beatDetector.CalculateMixInPoint(nextTrackItem.BPM, 8);
 
-            // Set crossfader to correct starting position BEFORE starting next deck
-            // If Deck A is active, crossfader should be at 0 (full left)
-            // If Deck B is active, crossfader should be at 100 (full right)
-            if (activeDeck == deckA)
-            {
-                CrossfaderPosition = 0;
-            }
-            else
-            {
-                CrossfaderPosition = 100;
-            }
+                    if (currentTrack != null && currentTrack.BPM > 0)
+                    {
+                        // Check if BPM gap is too large for a beat-synced mix
+                        double maxBpm = Math.Max(currentTrack.BPM, nextTrackItem.BPM);
+                        double minBpm = Math.Min(currentTrack.BPM, nextTrackItem.BPM);
+                        double bpmRatio = maxBpm / minBpm;
+                        
+                        if (bpmRatio > 1.10)
+                        {
+                            DJAutoMixApp.App.Log($"BPM gap too large ({currentTrack.BPM:F0} vs {nextTrackItem.BPM:F0}), doing simple crossfade without sync");
+                            StatusChanged?.Invoke(this, $"BPM gap too large ({currentTrack.BPM:F0} vs {nextTrackItem.BPM:F0}), crossfading without sync");
+                            // Don't sync — each deck plays at its own tempo
+                        }
+                        else
+                        {
+                            var masterPosition = activeDeck.CurrentPosition.TotalSeconds;
+                            var masterBeatPeriod = 60.0 / currentTrack.BPM;
+                            var masterPhase = (masterPosition % masterBeatPeriod) / masterBeatPeriod;
 
-            // Start next track - Play() will use deck_play_synced for beatmatched start
-            DJAutoMixApp.App.Log($"StartMix: About to play nextDeck, IsSyncEnabled={nextDeck?.IsSyncEnabled}");
-            nextDeck?.Play();
+                            var slaveBeatPeriod = 60.0 / nextTrackItem.BPM;
+                            var slavePhase = (mixInPoint.TotalSeconds % slaveBeatPeriod) / slaveBeatPeriod;
 
-            // Start crossfade
-            var mixSteps = mixDurationSeconds * 10; // Update 10 times per second
-            var currentStep = 0;
+                            var phaseDiff = masterPhase - slavePhase;
+                            if (phaseDiff > 0.5) phaseDiff -= 1.0;
+                            if (phaseDiff < -0.5) phaseDiff += 1.0;
 
-            mixTimer = new System.Timers.Timer(100); // 100ms interval
-            mixTimer.Elapsed += (s, e) =>
-            {
-                currentStep++;
-                var progress = (double)currentStep / mixSteps;
-                // Update crossfader position - smooth transition from one side to the other
-                if (activeDeck == deckA)
-                {
-                    CrossfaderPosition = progress * 100; // Move from 0 to 100
+                            var adjustment = phaseDiff * slaveBeatPeriod;
+                            var alignedMixIn = mixInPoint.TotalSeconds + adjustment;
+                            if (alignedMixIn < 0) alignedMixIn = slaveBeatPeriod + alignedMixIn;
+
+                            mixInPoint = TimeSpan.FromSeconds(alignedMixIn);
+
+                            nextDeck.EnableSync(activeDeck);
+                            StatusChanged?.Invoke(this, $"Beat-syncing: {nextTrackItem.BPM:F1} → {currentTrack.BPM:F1} BPM");
+                        }
+                    }
+
+                    nextDeck.SetPosition(mixInPoint);
                 }
-                else
+
+                // Set crossfader to correct starting position
+                CrossfaderPosition = (activeDeck == deckA) ? 0 : 100;
+
+                nextDeck?.Play();
+
+                // Start crossfade timer
+                var mixSteps = mixDurationSeconds * 10;
+                var currentStep = 0;
+                var capturedActiveDeck = activeDeck;
+
+                mixTimer = new System.Timers.Timer(100);
+                mixTimer.Elapsed += (s, e) =>
                 {
-                    CrossfaderPosition = (1 - progress) * 100; // Move from 100 to 0
-                }
-                if (currentStep >= mixSteps)
-                {
-                    CompleteMixTransition();
-                }
-            };
-            mixTimer.Start();
-            DJAutoMixApp.App.Log($"StartMix: Timer started for crossfade");
+                    bool shouldComplete = false;
+                    lock (mixLock)
+                    {
+                        if (!isMixing || disposed) return;
+                        currentStep++;
+                        var progress = (double)currentStep / mixSteps;
+                        CrossfaderPosition = (capturedActiveDeck == deckA)
+                            ? progress * 100
+                            : (1 - progress) * 100;
+                        if (currentStep >= mixSteps)
+                            shouldComplete = true;
+                    }
+                    if (shouldComplete)
+                        CompleteMixTransition();
+                };
+                mixTimer.Start();
             }
             catch (Exception ex)
             {
                 DJAutoMixApp.App.Log($"StartMix ERROR: {ex.Message}");
-                DJAutoMixApp.App.Log($"StartMix Stack: {ex.StackTrace}");
-                isMixing = false;  // Reset on error
+                lock (mixLock) { isMixing = false; }
             }
         }
 
         private void CompleteMixTransition()
         {
-            mixTimer?.Stop();
-            mixTimer?.Dispose();
-            mixTimer = null;
+            lock (mixLock)
+            {
+                if (!isMixing || disposed) return;
 
-            // Stop the old deck
+                var timer = mixTimer;
+                mixTimer = null;
+                isMixing = false;
+                timer?.Stop();
+                timer?.Dispose();
+            }
+
             var oldDeck = activeDeck;
-
-            // Switch decks
             SwitchDecks();
-
+            
+            // Snap crossfader to the new active deck's side so it's fully audible
+            CrossfaderPosition = (activeDeck == deckA) ? 0 : 100;
+            
             oldDeck?.Stop();
-
-            // Disable sync on the new active deck (it's now the master)
             activeDeck?.DisableSync();
-
-            // Start tempo recovery - gradually return to original BPM
             StartTempoRecovery();
-
-            // Move to next track in playlist
             playlistManager.MoveNext();
 
-            isMixing = false;
             MixCompleted?.Invoke(this, EventArgs.Empty);
             StatusChanged?.Invoke(this, $"Now playing: {playlistManager.CurrentTrack?.Title}");
         }
@@ -337,58 +350,39 @@ namespace DJAutoMixApp.Services
             tempoRecoveryTimer?.Stop();
             tempoRecoveryTimer?.Dispose();
 
-            // Get current tempo (it's synced to the previous track's BPM)
-            // We want to gradually return to 1.0 (original BPM)
             double currentTempo = AudioEngineInterop.deck_get_tempo(activeDeck == deckA ? 0 : 1);
             recoveryStartTempo = currentTempo;
 
             if (Math.Abs(currentTempo - 1.0) < 0.001)
-            {
-                // Already at normal tempo, no recovery needed
                 return;
-            }
 
-            DJAutoMixApp.App.Log($"TempoRecovery: Starting from {currentTempo:F3} -> 1.0 over {TEMPO_RECOVERY_SECONDS}s");
-
-            var recoverySteps = TEMPO_RECOVERY_SECONDS * 10; // Update 10 times per second
+            var recoverySteps = TEMPO_RECOVERY_SECONDS * 10;
             var currentStep = 0;
 
-            tempoRecoveryTimer = new System.Timers.Timer(100); // 100ms interval
-            tempoRecoveryTimer.AutoReset = true;  // IMPORTANT: Make timer repeat!
+            tempoRecoveryTimer = new System.Timers.Timer(100);
+            tempoRecoveryTimer.AutoReset = true;
             tempoRecoveryTimer.Elapsed += (s, e) =>
             {
-                currentStep++;
-                var progress = (double)currentStep / recoverySteps;
-                
-                // Linear interpolation from current tempo to 1.0
-                var newTempo = recoveryStartTempo + (1.0 - recoveryStartTempo) * progress;
-                
-                if (activeDeck != null)
+                lock (mixLock)
                 {
-                    activeDeck.Tempo = newTempo;
-                }
+                    if (disposed) return;
+                    currentStep++;
+                    var progress = (double)currentStep / recoverySteps;
+                    var newTempo = recoveryStartTempo + (1.0 - recoveryStartTempo) * progress;
 
-                // Log every 3 seconds (30 steps)
-                if (currentStep % 30 == 0)
-                {
-                    DJAutoMixApp.App.Log($"TempoRecovery: {progress:P0} complete, tempo={newTempo:F3}");
-                }
-                
-                // Notify UI of progress
-                TempoRecoveryProgressChanged?.Invoke(this, progress);
-
-                if (currentStep >= recoverySteps)
-                {
-                    // Recovery complete
-                    tempoRecoveryTimer?.Stop();
-                    tempoRecoveryTimer?.Dispose();
-                    tempoRecoveryTimer = null;
-                    
                     if (activeDeck != null)
+                        activeDeck.Tempo = newTempo;
+
+                    TempoRecoveryProgressChanged?.Invoke(this, progress);
+
+                    if (currentStep >= recoverySteps)
                     {
-                        activeDeck.Tempo = 1.0;
+                        tempoRecoveryTimer?.Stop();
+                        tempoRecoveryTimer?.Dispose();
+                        tempoRecoveryTimer = null;
+                        if (activeDeck != null)
+                            activeDeck.Tempo = 1.0;
                     }
-                    DJAutoMixApp.App.Log($"TempoRecovery: Complete - tempo now 1.0");
                 }
             };
             tempoRecoveryTimer.Start();
@@ -428,12 +422,26 @@ namespace DJAutoMixApp.Services
                     track.BPM = trackInfo.BPM;
                     track.BeatOffset = trackInfo.FirstBeatOffset;
                     track.Duration = trackInfo.Duration;
-                    track.MixOutPoint = beatDetector.CalculateMixOutPoint(track.BPM, track.Duration, 16);
-                    track.MixInPoint = beatDetector.CalculateMixInPoint(track.BPM, 8);
+                    if (track.BPM > 0)
+                    {
+                        track.MixOutPoint = beatDetector.CalculateMixOutPoint(track.BPM, track.Duration, 16);
+                        track.MixInPoint = beatDetector.CalculateMixInPoint(track.BPM, 8);
+                    }
                 }
 
                 // Pass beat offset for accurate phase sync
                 deck.LoadTrack(track.FilePath, track.BPM, track.BeatOffset);
+
+                // If the playlist item has no BPM but the deck determined one (e.g. via
+                // MiniBPM or default 120), sync it back so transitions can tempo-match.
+                if (track.BPM == 0 && deck.BPM > 0)
+                {
+                    track.BPM = deck.BPM;
+                    track.BeatOffset = deck.BeatOffset;
+                    if (track.Duration == TimeSpan.Zero)
+                        track.Duration = deck.Duration;
+                }
+
                 StatusChanged?.Invoke(this, $"Loaded: {track.Title} ({track.BPM:F1} BPM)");
             }
             catch (Exception ex)
@@ -442,16 +450,33 @@ namespace DJAutoMixApp.Services
             }
         }
 
-        private void UpdateDeckVolumes()
-        {
-            // Update C++ engine's mixer crossfader directly
-            AudioEngineInterop.mixer_set_crossfader((float)(crossfaderPosition / 100.0)); // 0-100 -> 0.0-1.0
-        }
-
         public void Dispose()
         {
+            if (disposed) return;
+            disposed = true;
+
+            if (isAutoMixEnabled)
+                StopAutoMix();
+
             mixTimer?.Stop();
             mixTimer?.Dispose();
+            mixTimer = null;
+
+            tempoRecoveryTimer?.Stop();
+            tempoRecoveryTimer?.Dispose();
+            tempoRecoveryTimer = null;
+
+            // Unsubscribe from deck events
+            deckA.PositionChanged -= OnDeckPositionChanged;
+            deckB.PositionChanged -= OnDeckPositionChanged;
+            deckA.TrackEnded -= OnTrackEnded;
+            deckB.TrackEnded -= OnTrackEnded;
+
+            // Reset state
+            activeDeck = null;
+            nextDeck = null;
+            isAutoMixEnabled = false;
+            isMixing = false;
         }
     }
 }

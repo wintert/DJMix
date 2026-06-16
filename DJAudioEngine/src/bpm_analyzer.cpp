@@ -421,4 +421,60 @@ DJ_API double audio_analyze_beat_offset(int deck_id, double bpm) {
     return dj::detectFirstBeat(data, totalSamples, sampleRate, bpm);
 }
 
+// File-based BPM analysis (creates internal AudioFile, safe to use while decks are playing)
+double dj::analyzeBPMFromFile(const char* filepath) {
+    if (!filepath) return 0.0;
+    
+    AudioFile tempFile;
+    if (!tempFile.load(filepath)) {
+        FILE* logFile = fopen("c:\\Apps\\DJApp\\cpp_debug.log", "a");
+        if (logFile) { fprintf(logFile, "analyzeBPMFromFile: FAILED to load file: %s\n", filepath); fclose(logFile); }
+        return 0.0;
+    }
+    
+    const float* data = tempFile.getData();
+    int64_t totalSamples = tempFile.getTotalSamples();
+    int sampleRate = tempFile.getSampleRate();
+    
+    FILE* logFile = fopen("c:\\Apps\\DJApp\\cpp_debug.log", "a");
+    if (logFile) {
+        fprintf(logFile, "analyzeBPMFromFile: loaded '%s' - %lld frames, %d Hz\n", filepath, (long long)totalSamples, sampleRate);
+        fclose(logFile);
+    }
+    
+    double result = dj::analyzeBPM(data, totalSamples, sampleRate);
+    
+    logFile = fopen("c:\\Apps\\DJApp\\cpp_debug.log", "a");
+    if (logFile) {
+        fprintf(logFile, "analyzeBPMFromFile: result=%.1f BPM\n", result);
+        fclose(logFile);
+    }
+    
+    return result;
+}
+
+double dj::detectFirstBeatFromFile(const char* filepath, double bpm) {
+    if (!filepath || bpm <= 0) return 0.0;
+    
+    AudioFile tempFile;
+    if (!tempFile.load(filepath)) return 0.0;
+    
+    const float* data = tempFile.getData();
+    int64_t totalSamples = tempFile.getTotalSamples();
+    int sampleRate = tempFile.getSampleRate();
+    
+    return dj::detectFirstBeat(data, totalSamples, sampleRate, bpm);
+}
+
+// C API for file-based BPM analysis
+extern "C" {
+
+DJ_API double audio_analyze_bpm_from_file(const char* filepath) {
+    return dj::analyzeBPMFromFile(filepath);
+}
+
+DJ_API double audio_analyze_beat_offset_from_file(const char* filepath, double bpm) {
+    return dj::detectFirstBeatFromFile(filepath, bpm);
+}
+
 } // extern "C"
